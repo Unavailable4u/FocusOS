@@ -46,16 +46,24 @@ def clean_date_string(raw_date):
     return str(raw_date).strip()
 
 
-def build_chrono_timeline_graph(current_interval, distribution_dict):
+def build_chrono_timeline_graph(current_interval, distribution_dict, target_dates=None):
     graph_columns = []
     max_hour_total = 1
     for k, val in distribution_dict.items():
         if isinstance(val, dict): max_hour_total = max(max_hour_total, sum(val.values()))
         elif isinstance(val, (int, float)): max_hour_total = max(max_hour_total, val)
 
-    if current_interval == "Daily": sorted_keys = [str(h) for h in range(24)]
-    elif current_interval == "Weekly": sorted_keys = list(distribution_dict.keys())
-    else: sorted_keys = sorted(list(distribution_dict.keys()), key=lambda x: int(x) if x.isdigit() else x)
+    # For Daily: always show all 24 hours.
+    # For Weekly/Monthly: use target_dates so ALL days in the range appear as
+    # columns, even days with zero focus — without this, only days with data
+    # show up and the chart looks empty when browsing recent dates.
+    if current_interval == "Daily":
+        sorted_keys = [str(h) for h in range(24)]
+    else:
+        if target_dates:
+            sorted_keys = sorted(target_dates)
+        else:
+            sorted_keys = sorted(distribution_dict.keys())
 
     for axis_key in sorted_keys:
         hour_data = distribution_dict.get(axis_key, {})
@@ -67,25 +75,46 @@ def build_chrono_timeline_graph(current_interval, distribution_dict):
             transparent_space_height = 135 - total_bar_height
             for task_name, mins in sorted(hour_data.items(), key=lambda x: str(x[0]).strip().lower()):
                 if mins > 0:
-                    stacked_segments.append(ft.Container(width=22, height=max(4, int((mins / total_mins) * total_bar_height)), bgcolor=get_focus_color(task_name), border_radius=2, tooltip=f"{axis_key} - {task_name}: {int(mins)}m"))
+                    stacked_segments.append(ft.Container(
+                        width=28, height=max(4, int((mins / total_mins) * total_bar_height)),
+                        bgcolor=get_focus_color(task_name), border_radius=3,
+                        tooltip=f"{axis_key} — {task_name}: {int(mins)}m"
+                    ))
         else:
             transparent_space_height = 131
-            stacked_segments.append(ft.Container(width=22, height=4, bgcolor="rgba(255,255,255,0.02)", border_radius=2))
+            stacked_segments.append(ft.Container(width=28, height=4, bgcolor="rgba(255,255,255,0.04)", border_radius=3))
 
-        display_label = f"{int(axis_key):02d}h" if current_interval == "Daily" else axis_key
+        if current_interval == "Daily":
+            try:
+                display_label = f"{int(axis_key):02d}h"
+            except (ValueError, TypeError):
+                display_label = axis_key
+        else:
+            try:
+                display_label = datetime.strptime(axis_key, "%Y-%m-%d").strftime("%b %d")
+            except (ValueError, TypeError):
+                display_label = axis_key
+
         graph_columns.append(
             ft.Column([
-                ft.Container(width=22, height=transparent_space_height, bgcolor="transparent"),
+                ft.Container(width=28, height=transparent_space_height, bgcolor="transparent"),
                 ft.Column(controls=stacked_segments, spacing=1, alignment=ft.MainAxisAlignment.END),
                 ft.Text(display_label, size=9, color="#8E9AA6", weight=ft.FontWeight.BOLD)
             ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         )
 
+    subtitle = "Hourly Focus Breakdown" if current_interval == "Daily" else ("7-Day Focus Trend" if current_interval == "Weekly" else "30-Day Focus Overview")
     return ft.Container(
         content=ft.Column([
-            ft.Row([ft.Text("Distributed Chronological Focus Timeline Grid", size=13, weight=ft.FontWeight.W_600, color="#FFFFFF"), ft.Text("Historical Density Logs", size=10, color="#45A29E")], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([
+                ft.Text("Distributed Chronological Focus Timeline Grid", size=13, weight=ft.FontWeight.W_600, color="#FFFFFF"),
+                ft.Text(subtitle, size=10, color="#45A29E")
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Divider(height=12, color="rgba(255,255,255,0.05)"),
-            ft.Container(content=ft.Row(controls=graph_columns, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, scroll=ft.ScrollMode.ADAPTIVE), padding=ft.Padding(5, 8, 5, 2))
+            ft.Container(
+                content=ft.Row(controls=graph_columns, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, scroll=ft.ScrollMode.ADAPTIVE),
+                padding=ft.Padding(5, 8, 5, 2)
+            )
         ]),
         bgcolor="#151A22", padding=16, border_radius=10,
         border=ft.Border(ft.BorderSide(1, "rgba(255,255,255,0.05)"), ft.BorderSide(1, "rgba(255,255,255,0.05)"), ft.BorderSide(1, "rgba(255,255,255,0.05)"), ft.BorderSide(1, "rgba(255,255,255,0.05)"))

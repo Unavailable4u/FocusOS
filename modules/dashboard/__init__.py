@@ -7,65 +7,36 @@ from .timelines import build_chrono_timeline_graph, build_expense_trend_graph, b
 from .charts import create_stat_card, build_proportional_share_panel, build_upcoming_goal_pie_panel
 
 def build_dashboard(page: ft.Page):
-    current_offset = 0
     current_interval = "Daily"
-    
-    # --- DYNAMIC INITIALIZATION ENGINE ---
-    def calculate_initial_offset():
-        try:
-            raw_data = dm.load_data()
-            active_dates = set()
-            
-            hourly_dist = raw_data.get("hourly_task_distribution", {})
-            for date_str in hourly_dist.keys():
-                active_dates.add(date_str)
-                
-            for expense in raw_data.get("expenses", []):
-                exp_date = expense.get("date")
-                if exp_date:
-                    active_dates.add(exp_date)
-            
-            if active_dates:
-                latest_logged_date_str = max(active_dates)
-                latest_date = datetime.strptime(latest_logged_date_str, "%Y-%m-%d").date()
-                today_date = datetime.now().date()
-                
-                delta_days = (latest_date - today_date).days
-                return delta_days
-        except Exception:
-            pass
-        return 0
-
-    time_offset = calculate_initial_offset()
+    time_offset = 0  # 0 = today, -1 = yesterday, etc.
 
     dashboard_subtitle_lbl = ft.Text("", size=13, color="grey600")
-    card_focus = ft.Container(expand=True)
-    card_tasks = ft.Container(expand=True)
+    card_focus    = ft.Container(expand=True)
+    card_tasks    = ft.Container(expand=True)
     card_expenses = ft.Container(expand=True)
-    
-    chrono_bar_graph = ft.Container(expand=True)
-    expense_bar_graph = ft.Container(expand=True)
-    monthly_horizontal_graph = ft.Container(expand=True) 
-    
-    task_distribution_panel = ft.Container(expand=True)
+
+    chrono_bar_graph        = ft.Container(expand=True)
+    expense_bar_graph       = ft.Container(expand=True)
+    monthly_horizontal_graph = ft.Container(expand=True)
+
+    task_distribution_panel    = ft.Container(expand=True)
     expense_distribution_panel = ft.Container(expand=True)
-    goal_pie_panel = build_upcoming_goal_pie_panel()
+    goal_pie_panel             = build_upcoming_goal_pie_panel()
 
     def repaint_dashboard_ui():
-        m = parse_aggregated_metrics(current_interval, time_offset)
-        raw_db_data = dm.load_data()
-        
-        btn_next.disabled = (time_offset == 0)
-        btn_next.icon_color = "grey700" if (time_offset == 0) else "#00FFFF"
+        nonlocal time_offset
+        m            = parse_aggregated_metrics(current_interval, time_offset)
+        raw_db_data  = dm.load_data()
+
+        btn_next.disabled   = (time_offset >= 0)
+        btn_next.icon_color = "grey700" if (time_offset >= 0) else "#00FFFF"
         try: btn_next.update()
         except Exception: pass
 
-        # Synchronize display dates to match the visual calendar frame
         display_dates = []
         for d_str in m["target_dates"]:
             try:
-                dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                display_dates.append(dt_obj.strftime("%Y-%m-%d"))
+                display_dates.append(datetime.strptime(d_str, "%Y-%m-%d").strftime("%Y-%m-%d"))
             except ValueError:
                 display_dates.append(d_str)
 
@@ -74,15 +45,15 @@ def build_dashboard(page: ft.Page):
         except Exception: pass
 
         f_hours, f_mins = divmod(m["total_focus_mins"], 60)
-        card_focus.content = create_stat_card(f"FOCUS TIME TRACKED ({current_interval.upper()})", f"{f_hours}h {int(f_mins)}m", "Productive focus allocation", "#00FFFF")
-        card_tasks.content = create_stat_card("MATRIX TOTAL ACTIONS", f"{m['completed_tasks']}", f"Active backlog remaining: {m['pending_tasks']}", "#00E676")
+        card_focus.content    = create_stat_card(f"FOCUS TIME TRACKED ({current_interval.upper()})", f"{f_hours}h {int(f_mins)}m", "Productive focus allocation", "#00FFFF")
+        card_tasks.content    = create_stat_card("MATRIX TOTAL ACTIONS", f"{m['completed_tasks']}", f"Active backlog remaining: {m['pending_tasks']}", "#00E676")
         card_expenses.content = create_stat_card("CONSOLIDATED BURNS TALLY", f"৳{m['total_expense']:,.2f}", "Tracked financial outbounds", "#FF9100")
 
-        chrono_bar_graph.content = build_chrono_timeline_graph(current_interval, m["chrono_distribution"])
+        chrono_bar_graph.content        = build_chrono_timeline_graph(current_interval, m["chrono_distribution"], m["target_dates"])
         task_distribution_panel.content = build_proportional_share_panel("Task Category Volume Distribution Share", m["task_time_breakdown"], is_currency=False)
         expense_distribution_panel.content = build_proportional_share_panel("Capital Resource Cost Proportional Allocation", m["category_expense_breakdown"], is_currency=True)
-        
-        expense_bar_graph.content = build_expense_trend_graph(display_dates, raw_db_data.get("expenses", []))
+
+        expense_bar_graph.content        = build_expense_trend_graph(display_dates, raw_db_data.get("expenses", []))
         monthly_horizontal_graph.content = build_monthly_horizontal_focus_graph(raw_db_data.get("hourly_task_distribution", {}))
 
         try:
@@ -94,7 +65,7 @@ def build_dashboard(page: ft.Page):
     def interval_changed(e):
         nonlocal current_interval, time_offset
         current_interval = "Daily" if e.control.selected_index == 0 else ("Weekly" if e.control.selected_index == 1 else "Monthly")
-        time_offset = calculate_initial_offset() if current_interval == "Daily" else 0
+        time_offset = 0
         repaint_dashboard_ui()
 
     def step_backward(e):
@@ -108,22 +79,50 @@ def build_dashboard(page: ft.Page):
             time_offset += 1
             repaint_dashboard_ui()
 
-    # --- FIXED: REMOVED ARTIFICIAL +1 DAY SHIFT FROM THE CALENDAR PICKER ---
-    def handle_anchor_date_picked(e):
-        nonlocal time_offset
+    # ── DATE PICKER FIX ──────────────────────────────────────────────────────
+    # Flet's DatePicker fires on_change with a datetime object whose time
+    # component is midnight UTC. In UTC+6 that rolls back to the previous
+    # calendar day. Fix: store the pending value on on_change, then commit
+    # it on on_dismiss (which fires after the user taps OK / confirms).
+    _pending_date = {"value": None}
+
+    def handle_anchor_date_change(e):
+        """Store the raw picker value; don't apply it yet."""
         if e.control.value:
-            selected_date = e.control.value
-            today = datetime.now()
-            delta = datetime(selected_date.year, selected_date.month, selected_date.day) - datetime(today.year, today.month, today.day)
-            
-            if current_interval == "Daily": time_offset = delta.days
-            elif current_interval == "Weekly": time_offset = delta.days // 7
-            else: time_offset = delta.days // 30
-            repaint_dashboard_ui()
+            _pending_date["value"] = e.control.value
+
+    def handle_anchor_date_dismiss(e):
+        """Apply the stored date only when the user confirms (dismisses dialog)."""
+        nonlocal time_offset
+        raw = _pending_date["value"]
+        if raw is None:
+            return
+
+        # Normalise to a plain date — add 1 day to correct the UTC-midnight shift
+        # that Flet introduces on Windows (picker returns 23:00 prev day in UTC+6).
+        if hasattr(raw, "date"):
+            selected_day = raw.date() + timedelta(days=1)
+        else:
+            selected_day = raw + timedelta(days=1)
+
+        today_day = datetime.now().date()
+        delta     = selected_day - today_day
+
+        if current_interval == "Daily":
+            time_offset = delta.days
+        elif current_interval == "Weekly":
+            time_offset = delta.days // 7
+        else:
+            time_offset = delta.days // 30
+
+        _pending_date["value"] = None
+        repaint_dashboard_ui()
 
     anchor_picker_dialog = ft.DatePicker(
-        first_date=datetime(2020, 1, 1), last_date=datetime(2030, 12, 31),
-        on_change=handle_anchor_date_picked
+        first_date=datetime(2020, 1, 1),
+        last_date=datetime(2030, 12, 31),
+        on_change=handle_anchor_date_change,
+        on_dismiss=handle_anchor_date_dismiss,
     )
     if anchor_picker_dialog not in page.overlay:
         page.overlay.append(anchor_picker_dialog)
@@ -134,17 +133,17 @@ def build_dashboard(page: ft.Page):
 
     interval_toggle = ft.CupertinoSegmentedButton(
         controls=[
-            ft.Text("Daily View", size=12, weight=ft.FontWeight.W_600, width=80, text_align=ft.TextAlign.CENTER),
-            ft.Text("Weekly View", size=12, weight=ft.FontWeight.W_600, width=80, text_align=ft.TextAlign.CENTER),
-            ft.Text("Monthly View", size=12, weight=ft.FontWeight.W_600, width=80, text_align=ft.TextAlign.CENTER)
+            ft.Text("Daily View",   size=12, weight=ft.FontWeight.W_600, width=80, text_align=ft.TextAlign.CENTER),
+            ft.Text("Weekly View",  size=12, weight=ft.FontWeight.W_600, width=80, text_align=ft.TextAlign.CENTER),
+            ft.Text("Monthly View", size=12, weight=ft.FontWeight.W_600, width=80, text_align=ft.TextAlign.CENTER),
         ],
-        selected_index=0, selected_color="#00FFFF", unselected_color="#1E2631", border_color="rgba(255,255,255,0.15)",
-        on_change=interval_changed
+        selected_index=0, selected_color="#00FFFF", unselected_color="#1E2631",
+        border_color="rgba(255,255,255,0.15)", on_change=interval_changed,
     )
 
-    btn_prev = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_LEFT_ROUNDED, icon_color="#00FFFF", icon_size=22, on_click=step_backward)
-    btn_next = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED, icon_color="#00FFFF", icon_size=22, on_click=step_forward)
-    btn_calendar = ft.IconButton(icon=ft.Icons.CALENDAR_MONTH_ROUNDED, icon_color="#00FFFF", icon_size=22, on_click=trigger_anchor_calendar)
+    btn_prev     = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_LEFT_ROUNDED,  icon_color="#00FFFF", icon_size=22, on_click=step_backward)
+    btn_next     = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED, icon_color="grey700", icon_size=22, on_click=step_forward, disabled=True)
+    btn_calendar = ft.IconButton(icon=ft.Icons.CALENDAR_MONTH_ROUNDED,       icon_color="#00FFFF", icon_size=22, on_click=trigger_anchor_calendar)
 
     repaint_dashboard_ui()
 
@@ -152,25 +151,21 @@ def build_dashboard(page: ft.Page):
         ft.Row([
             ft.Column([
                 ft.Text("Comprehensive Performance Dashboard Engine", size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
-                dashboard_subtitle_lbl
+                dashboard_subtitle_lbl,
             ], spacing=2),
-            ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END)
+            ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         ft.Container(height=10),
         ft.Row([card_focus, card_tasks, card_expenses], spacing=12),
         ft.Container(height=5),
-        
-        monthly_horizontal_graph, 
+        monthly_horizontal_graph,
         ft.Container(height=5),
-        
         chrono_bar_graph,
         ft.Container(height=5),
-        
         ft.Row([task_distribution_panel, expense_distribution_panel, goal_pie_panel], spacing=12, alignment=ft.MainAxisAlignment.START),
         ft.Container(height=5),
-        
         expense_bar_graph,
-        ft.Container(height=5)
+        ft.Container(height=5),
     ], expand=True, scroll=ft.ScrollMode.ALWAYS)
 
     async def snap_inner_matrix_to_end_async():
