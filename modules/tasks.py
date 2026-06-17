@@ -1,6 +1,8 @@
 import flet as ft
 import sys
 import os
+import csv
+from datetime import datetime
 
 try:
     import data_manager as dm
@@ -39,6 +41,34 @@ def build_tasks(page: ft.Page):
             return f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
         return f"{mins}m"
 
+    def export_tasks_csv(e):
+        data = dm.load_data()
+        tasks = data.get("tasks", [])
+        desktop_dir = os.path.expanduser("~/Desktop")
+        try:
+            os.makedirs(desktop_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = os.path.join(desktop_dir, f"focusos_export_{timestamp}.csv")
+            with open(filepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["ID", "Title", "Quadrant", "Completed", "Due Date", "Comment", "Invested Minutes"])
+                for task in tasks:
+                    writer.writerow([
+                        task.get("id", ""),
+                        task.get("title", ""),
+                        task.get("quadrant", ""),
+                        task.get("completed", False),
+                        task.get("due_date", "") or "",
+                        task.get("comment", "") or "",
+                        get_task_invested_time(task.get("title", "")),
+                    ])
+            export_feedback.value = f"Exported {len(tasks)} task(s) to {filepath}"
+            export_feedback.color = "#81C784"
+        except Exception as ex:
+            export_feedback.value = f"Export failed: {ex}"
+            export_feedback.color = "#FF4B4B"
+        page.update()
+
     def add_task_clicked(e):
         nonlocal editing_task_id
         if not task_input.value:
@@ -47,9 +77,11 @@ def build_tasks(page: ft.Page):
         title = task_input.value
         quadrant = int(quadrant_dropdown.value if quadrant_dropdown.value else 1)
         comment_text = comment_input.value.strip() if comment_input.value else ""
+        due_date_text = due_date_display.value.strip() if due_date_display.value else ""
+        due_date_value = due_date_text if due_date_text else None
         
         if editing_task_id == -1:
-            dm.add_task(title, quadrant)
+            dm.add_task(title, quadrant, due_date=due_date_value)
             if comment_text:
                 data = dm.load_data()
                 tasks = data.get("tasks", [])
@@ -64,6 +96,7 @@ def build_tasks(page: ft.Page):
                     task["title"] = title
                     task["quadrant"] = quadrant
                     task["comment"] = comment_text
+                    task["due_date"] = due_date_value
                     break
             dm.save_data(data)
             
@@ -73,6 +106,7 @@ def build_tasks(page: ft.Page):
 
         task_input.value = ""
         comment_input.value = ""
+        due_date_display.value = ""
         refresh_matrix_boards(is_initial_load=False)
 
     def make_task_tile(task, config, compact_view=False):
@@ -80,6 +114,9 @@ def build_tasks(page: ft.Page):
         task_title = task.get("title", "Untitled Task")
         has_comment = "comment" in task and task["comment"]
         invested_mins = get_task_invested_time(task_title)
+        due_date_str = task.get("due_date")
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        is_overdue = bool(due_date_str) and not task["completed"] and due_date_str < today_str
 
         if compact_view:
             status_label = f"{invested_mins}m" if invested_mins > 0 else ""
@@ -90,14 +127,17 @@ def build_tasks(page: ft.Page):
                 status_label = f"Ongoing ({invested_mins}m)"
             else:
                 status_label = "Not Started"
+            if due_date_str:
+                status_label = f"{status_label} • Due {due_date_str}" if status_label else f"Due {due_date_str}"
 
-        def make_edit_handler(t_id=task_id, title=task_title, quad=task.get("quadrant", 1), comm=task.get("comment", "")):
+        def make_edit_handler(t_id=task_id, title=task_title, quad=task.get("quadrant", 1), comm=task.get("comment", ""), due=task.get("due_date", "")):
             def handle(e):
                 nonlocal editing_task_id
                 editing_task_id = t_id
                 task_input.value = title
                 quadrant_dropdown.value = str(quad)
                 comment_input.value = comm
+                due_date_display.value = due if due else ""
                 submit_btn.text = "Save Modifications"
                 submit_btn.icon = ft.Icons.EDIT_ROUNDED
                 page.update()
@@ -138,15 +178,28 @@ def build_tasks(page: ft.Page):
 
         text_decor = ft.TextDecoration.LINE_THROUGH if (task["completed"] and not compact_view) else None
 
+        title_row_controls = [
+            ft.Text(
+                task_title, 
+                size=13 if compact_view else 14, 
+                color="grey500" if task["completed"] else ("#FF4B4B" if is_overdue else "#FFFFFF"),
+                style=ft.TextStyle(decoration=text_decor),
+                expand=True
+            )
+        ]
+        if is_overdue:
+            title_row_controls.append(
+                ft.Container(
+                    content=ft.Text("⚠ Overdue", size=9, weight=ft.FontWeight.BOLD, color="#FF4B4B"),
+                    padding=ft.Padding(left=6, right=6, top=1, bottom=1),
+                    bgcolor="rgba(255,75,75,0.12)",
+                    border_radius=4
+                )
+            )
+
         task_details = ft.Row([
             ft.Column([
-                ft.Text(
-                    task_title, 
-                    size=13 if compact_view else 14, 
-                    color="grey500" if task["completed"] else "#FFFFFF",
-                    style=ft.TextStyle(decoration=text_decor),
-                    expand=True
-                ),
+                ft.Row(title_row_controls, spacing=6, expand=True),
                 ft.Text(status_label, size=10 if compact_view else 11, color="grey600" if task["completed"] else "#8E9AA6") if status_label else ft.Container()
             ], spacing=1, expand=True),
             trailing_controls
@@ -278,7 +331,37 @@ def build_tasks(page: ft.Page):
             ft.dropdown.Option("3", "Q3: Urgent, Not Important"), ft.dropdown.Option("4", "Q4: Backlog / Eliminate"),
         ], width=240
     )
+
+    def handle_date_picked(e):
+        if due_date_picker.value:
+            due_date_display.value = due_date_picker.value.strftime("%Y-%m-%d")
+            page.update()
+
+    def clear_due_date(e):
+        due_date_display.value = ""
+        page.update()
+
+    due_date_picker = ft.DatePicker(
+        first_date=datetime(2020, 1, 1),
+        last_date=datetime(2100, 12, 31),
+        on_change=handle_date_picked,
+    )
+    page.overlay.append(due_date_picker)
+
+    due_date_display = ft.TextField(
+        label="Due Date (optional)", label_style=ft.TextStyle(color="#45A29E"),
+        border_color="#243142", width=150, read_only=True, value=""
+    )
+
+    due_date_picker_row = ft.Row([
+        due_date_display,
+        ft.IconButton(ft.Icons.CALENDAR_MONTH_ROUNDED, icon_color="#45A29E", tooltip="Pick due date", on_click=lambda e: due_date_picker.pick_date()),
+        ft.IconButton(ft.Icons.CLOSE_ROUNDED, icon_color="#8E9AA6", icon_size=16, tooltip="Clear due date", on_click=clear_due_date),
+    ], spacing=0)
+
     submit_btn = ft.FilledButton("Add to Matrix", icon=ft.Icons.ADD_ROUNDED, style=ft.ButtonStyle(bgcolor="#1F2833", color="#66FCF1"), on_click=add_task_clicked)
+    export_btn = ft.IconButton(ft.Icons.DOWNLOAD_ROUNDED, icon_color="#45A29E", tooltip="Export tasks to CSV", on_click=export_tasks_csv)
+    export_feedback = ft.Text("", size=11, color="#8E9AA6")
 
     left_pane = ft.Container(expand=True, padding=2)
     right_pane = ft.Container(width=420, padding=2)
@@ -292,8 +375,12 @@ def build_tasks(page: ft.Page):
     ], expand=True)
 
     return ft.Column([
-        ft.Text("Itemized Matrix Priority Ledger Summary", size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
-        ft.Row([task_input, comment_input, quadrant_dropdown, submit_btn], spacing=10),
+        ft.Row([
+            ft.Text("Itemized Matrix Priority Ledger Summary", size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
+            export_btn,
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        ft.Row([task_input, comment_input, quadrant_dropdown, due_date_picker_row, submit_btn], spacing=10),
+        export_feedback,
         ft.Divider(height=15, color="#243142"),
         dual_view_matrix
     ], expand=True)

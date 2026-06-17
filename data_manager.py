@@ -11,21 +11,28 @@ def initialize_db():
             "tasks": [],
             "focus_logs": [],
             "expenses": [],
-            "categories": ["Study", "Food", "Transport", "Other"]
+            "categories": ["Study", "Food", "Transport", "Other"],
+            "budgets": {},         # e.g. {"Food": 3000, "Transport": 1000}
+            "journal": []          # [{"date": "YYYY-MM-DD", "mood": 3, "text": "..."}]
         }
         with open(DATA_FILE, "w") as f:
             json.dump(default_data, f, indent=4)
     else:
         data = load_data()
+        changed = False
         if "categories" not in data:
             data["categories"] = ["Study", "Food", "Transport", "Other"]
+            changed = True
+        if "budgets" not in data:
+            data["budgets"] = {}
+            changed = True
+        if changed:
             save_data(data)
 
 # --- BUG 5 FIX: update_expense now preserves the original date ---
 def update_expense(expense_index, new_title, new_amount, new_category, new_date=None):
     data = load_data()
     if 0 <= expense_index < len(data.get("expenses", [])):
-        # Preserve the original date if no new date is provided
         original_date = data["expenses"][expense_index].get(
             "date", datetime.now().strftime("%Y-%m-%d")
         )
@@ -33,7 +40,7 @@ def update_expense(expense_index, new_title, new_amount, new_category, new_date=
             "title": new_title,
             "amount": float(new_amount),
             "category": new_category,
-            "date": new_date if new_date else original_date  # <-- FIXED: date is no longer dropped
+            "date": new_date if new_date else original_date
         }
         save_data(data)
 
@@ -68,14 +75,35 @@ def delete_custom_category(category_name):
         if "Other" not in data["categories"]:
             data["categories"].append("Other")
 
+        # Remove budget for deleted category too
+        data.get("budgets", {}).pop(category_name, None)
+
         save_data(data)
+
+# --- BUDGET MANAGEMENT ---
+def set_budget(category_name: str, amount: float):
+    """Set or update the monthly budget for a category. Pass 0 to remove."""
+    data = load_data()
+    if "budgets" not in data:
+        data["budgets"] = {}
+    if amount > 0:
+        data["budgets"][category_name] = float(amount)
+    else:
+        data["budgets"].pop(category_name, None)
+    save_data(data)
+
+def get_budgets() -> dict:
+    """Returns the full budgets dict {category: amount}."""
+    return load_data().get("budgets", {})
 
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {
             "tasks": [], "expenses": [],
             "categories": ["Study", "Food", "Transport", "Other"],
-            "focus_logs": [], "hourly_focus": {}, "hourly_task_distribution": {}
+            "focus_logs": [], "hourly_focus": {},
+            "hourly_task_distribution": {},
+            "budgets": {}, "journal": []
         }
 
     try:
@@ -85,17 +113,21 @@ def load_data():
                 return {
                     "tasks": [], "expenses": [],
                     "categories": ["Study", "Food", "Transport", "Other"],
-                    "focus_logs": [], "hourly_focus": {}, "hourly_task_distribution": {}
+                    "focus_logs": [], "hourly_focus": {},
+                    "hourly_task_distribution": {},
+                    "budgets": {}, "journal": []
                 }
 
             data = json.loads(content)
 
-            if "tasks" not in data: data["tasks"] = []
-            if "expenses" not in data: data["expenses"] = []
-            if "categories" not in data: data["categories"] = ["Study", "Food", "Transport", "Other"]
-            if "focus_logs" not in data: data["focus_logs"] = []
-            if "hourly_focus" not in data: data["hourly_focus"] = {}
+            if "tasks"                   not in data: data["tasks"]                   = []
+            if "expenses"                not in data: data["expenses"]                = []
+            if "categories"              not in data: data["categories"]              = ["Study", "Food", "Transport", "Other"]
+            if "focus_logs"              not in data: data["focus_logs"]              = []
+            if "hourly_focus"            not in data: data["hourly_focus"]            = {}
             if "hourly_task_distribution" not in data: data["hourly_task_distribution"] = {}
+            if "budgets"                 not in data: data["budgets"]                 = {}
+            if "journal"                 not in data: data["journal"]                 = []
 
             return data
 
@@ -103,21 +135,24 @@ def load_data():
         return {
             "tasks": [], "expenses": [],
             "categories": ["Study", "Food", "Transport", "Other"],
-            "focus_logs": [], "hourly_focus": {}, "hourly_task_distribution": {}
+            "focus_logs": [], "hourly_focus": {},
+            "hourly_task_distribution": {},
+            "budgets": {}, "journal": []
         }
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-def add_task(title, quadrant):
+def add_task(title, quadrant, due_date=None):
     data = load_data()
     task_id = len(data["tasks"]) + 1 if data["tasks"] else 1
     new_task = {
         "id": task_id,
         "title": title,
         "quadrant": int(quadrant),
-        "completed": False
+        "completed": False,
+        "due_date": due_date  # Optional "YYYY-MM-DD" string, or None
     }
     data["tasks"].append(new_task)
     save_data(data)
@@ -141,21 +176,19 @@ def add_expense(title, amount, category):
         "title": title,
         "amount": float(amount),
         "category": category,
-        "date": datetime.now().strftime("%Y-%m-%d")  # <-- FIXED: date is now saved
+        "date": datetime.now().strftime("%Y-%m-%d")
     }
     data["expenses"].append(new_expense)
     save_data(data)
     return new_expense
 
 # --- BUG 6 FIX: log_focus now also writes to hourly_task_distribution ---
-# so that non-pomodoro focus logs appear correctly on the dashboard.
 def log_focus(task_title, duration_minutes):
     data = load_data()
-    now = datetime.now()
+    now  = datetime.now()
     today = now.strftime("%Y-%m-%d")
-    hour = now.hour
+    hour  = now.hour
 
-    # Keep existing focus_logs entry as before
     new_log = {
         "date": today,
         "hour": hour,
@@ -164,7 +197,6 @@ def log_focus(task_title, duration_minutes):
     }
     data["focus_logs"].append(new_log)
 
-    # FIXED: Also write to hourly_task_distribution so engine.py picks it up
     if "hourly_task_distribution" not in data:
         data["hourly_task_distribution"] = {}
     if today not in data["hourly_task_distribution"]:

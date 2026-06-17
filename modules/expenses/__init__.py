@@ -1,13 +1,28 @@
 import flet as ft
 import flet_charts as fch
+import os
+import csv
 from datetime import datetime, timedelta
 from .engine import load_expense_data, save_expense_data, get_filter_date_range, get_filter_banner_string, get_filtered_expenses
 from modules.color_palette import get_expense_color
 
+# Budget progress bar colours
+_BUDGET_OK      = "#00E676"   # green  — under 80 %
+_BUDGET_WARNING = "#FF9100"   # orange — 80–99 %
+_BUDGET_OVER    = "#FF1744"   # red    — 100 %+
+
+
+def _budget_bar_color(ratio: float) -> str:
+    if ratio >= 1.0:
+        return _BUDGET_OVER
+    if ratio >= 0.8:
+        return _BUDGET_WARNING
+    return _BUDGET_OK
+
+
 def build_expenses(page: ft.Page):
     editing_index        = -1
     current_filter_mode  = "Day"
-    # selected_anchor_date is ALWAYS a plain date object — never datetime
     selected_anchor_date = datetime.now().date()
 
     def populate_dropdowns():
@@ -15,11 +30,13 @@ def build_expenses(page: ft.Page):
         cats = data.get("categories", ["Study", "Food", "Transport", "Other"])
         category_dropdown.options    = [ft.dropdown.Option(c) for c in cats]
         manage_cat_dropdown.options  = [ft.dropdown.Option(c) for c in cats]
+        budget_cat_dropdown.options  = [ft.dropdown.Option(c) for c in cats]
         if cats:
-            if category_dropdown.value   not in cats: category_dropdown.value   = cats[0]
-            if manage_cat_dropdown.value not in cats: manage_cat_dropdown.value = cats[0]
+            if category_dropdown.value    not in cats: category_dropdown.value    = cats[0]
+            if manage_cat_dropdown.value  not in cats: manage_cat_dropdown.value  = cats[0]
+            if budget_cat_dropdown.value  not in cats: budget_cat_dropdown.value  = cats[0]
 
-    # ── FILTER DATE PICKER (bottom section) ──────────────────────────────────
+    # ── FILTER DATE PICKER ────────────────────────────────────────────────────
     _pending_anchor = {"value": None}
 
     def handle_anchor_date_change(e):
@@ -31,10 +48,9 @@ def build_expenses(page: ft.Page):
         raw = _pending_anchor["value"]
         if raw is None:
             return
-        if hasattr(raw, "date") and callable(raw.date):
-            picked = raw.date() + timedelta(days=1)
-        else:
-            picked = raw + timedelta(days=1)
+        picked = (raw.date() + timedelta(days=1)
+                  if hasattr(raw, "date") and callable(raw.date)
+                  else raw + timedelta(days=1))
         selected_anchor_date = picked
         refresh_expense_view()
         _pending_anchor["value"] = None
@@ -51,7 +67,7 @@ def build_expenses(page: ft.Page):
         anchor_picker_dialog.open = True
         page.update()
 
-    # ── ENTRY DATE PICKER (log transaction form) ─────────────────────────────
+    # ── ENTRY DATE PICKER ─────────────────────────────────────────────────────
     _pending_entry = {"value": None}
 
     def handle_entry_date_change(e):
@@ -62,10 +78,9 @@ def build_expenses(page: ft.Page):
         raw = _pending_entry["value"]
         if raw is None:
             return
-        if hasattr(raw, "date") and callable(raw.date):
-            picked = raw.date() + timedelta(days=1)
-        else:
-            picked = raw + timedelta(days=1)
+        picked = (raw.date() + timedelta(days=1)
+                  if hasattr(raw, "date") and callable(raw.date)
+                  else raw + timedelta(days=1))
         expense_date_input.value = picked.strftime("%Y-%m-%d")
         try: expense_date_input.update()
         except Exception: pass
@@ -83,7 +98,35 @@ def build_expenses(page: ft.Page):
         entry_picker_dialog.open = True
         page.update()
 
-    # ── FILTER MODE & NAVIGATION ─────────────────────────────────────────────
+    def export_expenses_csv(e):
+        data = load_expense_data()
+        expenses = data.get("expenses", [])
+        desktop_dir = os.path.expanduser("~/Desktop")
+        try:
+            os.makedirs(desktop_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = os.path.join(desktop_dir, f"focusos_export_{timestamp}.csv")
+            with open(filepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Title", "Amount", "Category", "Date"])
+                for exp in expenses:
+                    writer.writerow([
+                        exp.get("title", ""),
+                        exp.get("amount", 0),
+                        exp.get("category", ""),
+                        exp.get("date", ""),
+                    ])
+            export_feedback.value = f"Exported {len(expenses)} expense(s) to {filepath}"
+            export_feedback.color = "#81C784"
+        except Exception as ex:
+            export_feedback.value = f"Export failed: {ex}"
+            export_feedback.color = "#FF4B4B"
+        try:
+            export_feedback.update()
+        except Exception:
+            pass
+
+    # ── FILTER MODE & NAVIGATION ──────────────────────────────────────────────
     def filter_mode_shifted(e):
         nonlocal current_filter_mode
         idx = e.control.selected_index
@@ -148,18 +191,100 @@ def build_expenses(page: ft.Page):
                     "category": category_dropdown.value,
                     "date":     saved_date_str,
                 }
-            editing_index      = -1
-            submit_btn.text    = "Log Transaction"
-            submit_btn.icon    = ft.Icons.MONETIZATION_ON_ROUNDED
+            editing_index   = -1
+            submit_btn.text = "Log Transaction"
+            submit_btn.icon = ft.Icons.MONETIZATION_ON_ROUNDED
 
         save_expense_data(data)
-
-        expense_title.value        = ""
-        expense_amount.value       = ""
-        expense_amount.error_text  = None
-
+        expense_title.value       = ""
+        expense_amount.value      = ""
+        expense_amount.error_text = None
         selected_anchor_date = datetime.strptime(saved_date_str, "%Y-%m-%d").date()
         refresh_expense_view()
+
+    # ── BUDGET HELPERS ────────────────────────────────────────────────────────
+    def save_budget_clicked(e):
+        """Save the budget entered in the settings drawer."""
+        cat = budget_cat_dropdown.value
+        raw = budget_amount_input.value.strip()
+        if not cat or not raw:
+            return
+        try:
+            amt = float(raw)
+        except ValueError:
+            return
+        data = load_expense_data()
+        if "budgets" not in data:
+            data["budgets"] = {}
+        if amt > 0:
+            data["budgets"][cat] = amt
+        else:
+            data["budgets"].pop(cat, None)
+        save_expense_data(data)
+        budget_amount_input.value = ""
+        refresh_expense_view()
+
+    def _get_all_time_spent_by_cat() -> dict:
+        """
+        Returns {category: total_amount} for ALL expenses ever recorded —
+        used to compare against a monthly budget without date filtering.
+        """
+        data = load_expense_data()
+        totals = {}
+        for exp in data.get("expenses", []):
+            cat = exp.get("category", "Other")
+            totals[cat] = totals.get(cat, 0.0) + float(exp.get("amount", 0.0))
+        return totals
+
+    def build_budget_progress_panel(cats: list, budgets: dict, all_time_totals: dict):
+        """
+        For every category that has a budget set, render a labelled
+        progress bar showing spent vs budget.
+        """
+        rows = []
+        for cat in cats:
+            budget = budgets.get(cat, 0)
+            if budget <= 0:
+                continue
+            spent  = all_time_totals.get(cat, 0.0)
+            ratio  = min(spent / budget, 1.0) if budget > 0 else 0.0
+            color  = _budget_bar_color(spent / budget if budget > 0 else 0)
+            pct    = int((spent / budget) * 100) if budget > 0 else 0
+
+            status_text = (f"৳{int(spent)} / ৳{int(budget)}  ({pct}%)"
+                           + (" ⚠ OVER BUDGET" if spent > budget else ""))
+
+            rows.append(ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Container(width=10, height=10,
+                                     bgcolor=get_expense_color(cat), border_radius=2),
+                        ft.Text(cat, size=12, color="#E0E0E0",
+                                weight=ft.FontWeight.W_600, expand=True),
+                        ft.Text(status_text, size=11,
+                                color=color, weight=ft.FontWeight.W_500),
+                    ], spacing=6),
+                    ft.ProgressBar(
+                        value=ratio,
+                        color=color,
+                        bgcolor="rgba(255,255,255,0.08)",
+                        height=6,
+                        border_radius=3,
+                    ),
+                ], spacing=5),
+                padding=ft.Padding(0, 4, 0, 4),
+            ))
+
+        if not rows:
+            return ft.Container(
+                content=ft.Text(
+                    "No budgets set yet. Add one above.",
+                    size=11, color="grey500", italic=True,
+                ),
+                padding=ft.Padding(4, 6, 4, 6),
+            )
+
+        return ft.Column(controls=rows, spacing=4)
 
     # ── CHART HELPERS ─────────────────────────────────────────────────────────
     def get_pie_sections(filtered_items, cats):
@@ -175,10 +300,12 @@ def build_expenses(page: ft.Page):
                 sections.append(fch.PieChartSection(
                     value=total_amount, title=f"{pct:.1f}%",
                     color=get_expense_color(category), radius=40,
-                    title_style=ft.TextStyle(size=11, color="#FFFFFF", weight=ft.FontWeight.BOLD)
+                    title_style=ft.TextStyle(size=11, color="#FFFFFF",
+                                              weight=ft.FontWeight.BOLD)
                 ))
         if not sections:
-            sections.append(fch.PieChartSection(value=1, title="0%", color="#243142", radius=30))
+            sections.append(fch.PieChartSection(value=1, title="0%",
+                                                 color="#243142", radius=30))
         return sections
 
     def build_legend_row(filtered_items, cats):
@@ -186,14 +313,16 @@ def build_expenses(page: ft.Page):
         for _, exp in filtered_items:
             cat = exp.get("category", "Other")
             if cat in totals: totals[cat] += exp.get("amount", 0.0)
-        legend_items = []
+        items = []
         for cat, total in totals.items():
             if total > 0:
-                legend_items.append(ft.Row([
-                    ft.Container(width=10, height=10, bgcolor=get_expense_color(cat), border_radius=2),
-                    ft.Text(f"{cat} (৳{int(total)})", size=11, color="#E0E0E0")
+                items.append(ft.Row([
+                    ft.Container(width=10, height=10,
+                                 bgcolor=get_expense_color(cat), border_radius=2),
+                    ft.Text(f"{cat} (৳{int(total)})", size=11, color="#E0E0E0"),
                 ], spacing=4))
-        return ft.Row(controls=legend_items, alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True)
+        return ft.Row(controls=items, alignment=ft.MainAxisAlignment.CENTER,
+                      spacing=10, wrap=True)
 
     def build_itemized_ledger(filtered_items, cats):
         grouped_items = {c: [] for c in cats}
@@ -202,15 +331,15 @@ def build_expenses(page: ft.Page):
             if cat not in grouped_items: grouped_items[cat] = []
             grouped_items[cat].append((original_idx, exp))
 
-        # ── Grand total banner ────────────────────────────────────────────────
-        grand_total   = sum(item[1].get("amount", 0.0) for item in filtered_items)
-        entry_count   = len(filtered_items)
-        grand_banner  = ft.Container(
+        grand_total  = sum(item[1].get("amount", 0.0) for item in filtered_items)
+        entry_count  = len(filtered_items)
+        grand_banner = ft.Container(
             content=ft.Row([
                 ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, color="#66FCF1", size=18),
                 ft.Text(
-                    f"Total Expenses: ৳{int(grand_total)}  ({entry_count} {'entry' if entry_count == 1 else 'entries'})",
-                    size=14, weight=ft.FontWeight.BOLD, color="#66FCF1"
+                    f"Total Expenses: ৳{int(grand_total)}  "
+                    f"({entry_count} {'entry' if entry_count == 1 else 'entries'})",
+                    size=14, weight=ft.FontWeight.BOLD, color="#66FCF1",
                 ),
             ], spacing=8),
             bgcolor="#0D1117",
@@ -220,7 +349,7 @@ def build_expenses(page: ft.Page):
                 ft.BorderSide(1, "#243142"),
                 ft.BorderSide(1, "#243142"),
                 ft.BorderSide(1, "#243142"),
-                ft.BorderSide(2, "#66FCF1"),   # cyan left accent
+                ft.BorderSide(2, "#66FCF1"),
             ),
         )
 
@@ -230,17 +359,20 @@ def build_expenses(page: ft.Page):
             if not items: continue
             block_subtotal = sum(item[1].get("amount", 0.0) for item in items)
             item_rows = []
+
             for original_idx, item in items:
-                def make_edit_handler(index=original_idx, t=item["title"], a=item["amount"], c=item["category"], d=item.get("date", "")):
+                def make_edit_handler(index=original_idx, t=item["title"],
+                                      a=item["amount"], c=item["category"],
+                                      d=item.get("date", "")):
                     def handle(e):
                         nonlocal editing_index
-                        editing_index              = index
-                        expense_title.value        = t
-                        expense_amount.value       = str(int(a))
-                        category_dropdown.value    = c
-                        expense_date_input.value   = d
-                        submit_btn.text            = "Save Modifications"
-                        submit_btn.icon            = ft.Icons.EDIT_ROUNDED
+                        editing_index            = index
+                        expense_title.value      = t
+                        expense_amount.value     = str(int(a))
+                        category_dropdown.value  = c
+                        expense_date_input.value = d
+                        submit_btn.text          = "Save Modifications"
+                        submit_btn.icon          = ft.Icons.EDIT_ROUNDED
                         page.update()
                     return handle
 
@@ -259,38 +391,49 @@ def build_expenses(page: ft.Page):
                         ft.Text(f"{item.get('title')}", size=14, color="#E0E0E0"),
                     ], spacing=4),
                     ft.Row([
-                        ft.Text(f"৳{int(item.get('amount'))}", size=14, weight=ft.FontWeight.W_500, color="#66FCF1"),
-                        ft.IconButton(ft.Icons.EDIT_OUTLINED,           icon_size=16, icon_color="#45A29E", on_click=make_edit_handler()),
-                        ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED,  icon_size=16, icon_color="#FF4B4B", on_click=make_delete_handler()),
+                        ft.Text(f"৳{int(item.get('amount'))}", size=14,
+                                weight=ft.FontWeight.W_500, color="#66FCF1"),
+                        ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16,
+                                      icon_color="#45A29E", on_click=make_edit_handler()),
+                        ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=16,
+                                      icon_color="#FF4B4B", on_click=make_delete_handler()),
                     ], spacing=0),
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
 
             ledger_blocks.append(ft.Container(
                 content=ft.Column([
                     ft.Row([
-                        ft.Row([ft.Icon(ft.Icons.LABEL_IMPORTANT_ROUNDED, color=get_expense_color(category), size=18), ft.Text(category, size=15, weight=ft.FontWeight.BOLD, color=get_expense_color(category))]),
-                        ft.Text(f"Subtotal: ৳{int(block_subtotal)}", size=13, weight=ft.FontWeight.W_600, color="#FFFFFF"),
+                        ft.Row([
+                            ft.Icon(ft.Icons.LABEL_IMPORTANT_ROUNDED,
+                                    color=get_expense_color(category), size=18),
+                            ft.Text(category, size=15, weight=ft.FontWeight.BOLD,
+                                    color=get_expense_color(category)),
+                        ]),
+                        ft.Text(f"Subtotal: ৳{int(block_subtotal)}", size=13,
+                                weight=ft.FontWeight.W_600, color="#FFFFFF"),
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                     ft.Divider(height=5, color="#1F2833"),
                     ft.Column(controls=item_rows, spacing=2),
                 ]),
                 bgcolor="#1A212B", padding=10, border_radius=8,
-                border=ft.Border(ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, get_expense_color(category)), ft.BorderSide(1, "#243142"))
+                border=ft.Border(
+                    ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"),
+                    ft.BorderSide(1, get_expense_color(category)), ft.BorderSide(1, "#243142"),
+                ),
             ))
 
         if len(ledger_blocks) == 1:
-            # Only the banner — no actual records
             return ft.Column(controls=[
                 grand_banner,
-                ft.Container(content=ft.Text("No records found.", color="grey500"), alignment=ft.Alignment(0, 0), padding=20)
+                ft.Container(content=ft.Text("No records found.", color="grey500"),
+                             alignment=ft.Alignment(0, 0), padding=20),
             ], spacing=8)
 
-        return ft.Column(controls=ledger_blocks, spacing=10, scroll=ft.ScrollMode.ADAPTIVE)
+        return ft.Column(controls=ledger_blocks, spacing=10,
+                         scroll=ft.ScrollMode.ADAPTIVE)
 
     # ── STYLED TREND BAR CHART ────────────────────────────────────────────────
     def build_styled_trend_graph(filtered_items):
-        """Bar chart with per-category colours, amount labels above each bar,
-        and an AVG bar appended when the filter mode is Week or Month."""
         day_totals     = {}
         day_categories = {}
         for _, exp in filtered_items:
@@ -303,32 +446,31 @@ def build_expenses(page: ft.Page):
 
         if not day_totals:
             return ft.Container(
-                content=ft.Text("No data to plot", color="grey500", size=12, italic=True),
-                alignment=ft.alignment.Alignment(0, 0), padding=20
+                content=ft.Text("No data to plot", color="grey500",
+                                size=12, italic=True),
+                alignment=ft.alignment.Alignment(0, 0), padding=20,
             )
 
-        show_avg    = current_filter_mode in ("Week", "Month")
-        avg_val     = sum(day_totals.values()) / len(day_totals) if day_totals else 0.0
-
-        # Use the real max (or avg if that's larger) to size bars consistently
+        show_avg = current_filter_mode in ("Week", "Month")
+        avg_val  = sum(day_totals.values()) / len(day_totals) if day_totals else 0.0
         max_val  = max(day_totals.values()) if day_totals else 1.0
         if show_avg:
             max_val = max(max_val, avg_val)
 
-        columns  = []
         MAX_BAR_H = 120
+        columns   = []
 
-        def _make_bar_column(day_stamp, total_amt, cats_today, label_text, bar_color_override=None):
+        def _make_bar_column(day_stamp, total_amt, cats_today,
+                             label_text, bar_color_override=None):
             total_bar_h = max(6, int((total_amt / max_val) * MAX_BAR_H)) if max_val else 6
             segments    = []
 
             if bar_color_override:
-                # Single-colour bar (AVG bar)
                 segments.append(ft.Container(
                     width=32, height=total_bar_h,
                     bgcolor=bar_color_override,
                     border_radius=ft.BorderRadius(3, 3, 0, 0),
-                    tooltip=f"Daily Average: ৳{int(total_amt)}"
+                    tooltip=f"Daily Average: ৳{int(total_amt)}",
                 ))
             else:
                 sorted_cats = sorted(cats_today.items(), key=lambda x: x[0].lower())
@@ -339,23 +481,24 @@ def build_expenses(page: ft.Page):
                         segments.append(ft.Container(
                             width=32, height=seg_h,
                             bgcolor=get_expense_color(cat_name),
-                            border_radius=ft.BorderRadius(3, 3, 0, 0) if cat_name == last_cat else 0,
-                            tooltip=f"{cat_name}: ৳{int(cat_amt)}"
+                            border_radius=(ft.BorderRadius(3, 3, 0, 0)
+                                          if cat_name == last_cat else 0),
+                            tooltip=f"{cat_name}: ৳{int(cat_amt)}",
                         ))
 
             transparent_h = MAX_BAR_H - total_bar_h
-
             return ft.Column([
                 ft.Container(width=32, height=transparent_h, bgcolor="transparent"),
                 ft.Container(
-                    content=ft.Text(
-                        f"৳{int(total_amt)}", size=8, color="#FFFFFF",
-                        weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER
-                    ),
-                    width=36, alignment=ft.alignment.Alignment(0, 0)
+                    content=ft.Text(f"৳{int(total_amt)}", size=8, color="#FFFFFF",
+                                    weight=ft.FontWeight.BOLD,
+                                    text_align=ft.TextAlign.CENTER),
+                    width=36, alignment=ft.alignment.Alignment(0, 0),
                 ),
-                ft.Column(controls=segments, spacing=0, alignment=ft.MainAxisAlignment.END),
-                ft.Text(label_text, size=9, color="#8E9AA6", weight=ft.FontWeight.BOLD),
+                ft.Column(controls=segments, spacing=0,
+                          alignment=ft.MainAxisAlignment.END),
+                ft.Text(label_text, size=9, color="#8E9AA6",
+                        weight=ft.FontWeight.BOLD),
             ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
         for day_stamp in sorted(day_totals.keys()):
@@ -367,36 +510,34 @@ def build_expenses(page: ft.Page):
                 day_label = day_stamp[-2:]
             columns.append(_make_bar_column(day_stamp, total_amt, cats_today, day_label))
 
-        # ── AVG bar (Week / Month only) ────────────────────────────────────
         if show_avg and avg_val > 0:
-            # Vertical dashed separator
             columns.append(ft.Column([
                 ft.Container(width=1, height=MAX_BAR_H + 20, bgcolor="#243142"),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER))
-
             columns.append(_make_bar_column(
-                day_stamp="avg", total_amt=avg_val,
-                cats_today={}, label_text="AVG",
-                bar_color_override="#45A29E"
+                "avg", avg_val, {}, "AVG", bar_color_override="#45A29E",
             ))
 
         return ft.Container(
             content=ft.Column([
-                ft.Text("Daily Spend Breakdown", size=12, color="#8E9AA6", weight=ft.FontWeight.W_600),
+                ft.Text("Daily Spend Breakdown", size=12, color="#8E9AA6",
+                        weight=ft.FontWeight.W_600),
                 ft.Container(
-                    content=ft.Row(controls=columns, spacing=6, scroll=ft.ScrollMode.ADAPTIVE),
-                    padding=ft.Padding(4, 6, 4, 2)
+                    content=ft.Row(controls=columns, spacing=6,
+                                   scroll=ft.ScrollMode.ADAPTIVE),
+                    padding=ft.Padding(4, 6, 4, 2),
                 ),
             ], spacing=4),
             bgcolor="#11151D", border_radius=8, padding=10,
         )
 
-    # ── CATEGORY MANAGEMENT ───────────────────────────────────────────────────
+    # ── CATEGORY & BUDGET MANAGEMENT ──────────────────────────────────────────
     def add_new_cat_trigger(e):
         if custom_cat_input.value:
             clean_cat = custom_cat_input.value.strip()
             data = load_expense_data()
-            if "categories" not in data: data["categories"] = ["Study", "Food", "Transport", "Other"]
+            if "categories" not in data:
+                data["categories"] = ["Study", "Food", "Transport", "Other"]
             if clean_cat not in data["categories"]:
                 data["categories"].append(clean_cat)
                 save_expense_data(data)
@@ -409,14 +550,17 @@ def build_expenses(page: ft.Page):
             data = load_expense_data()
             if target_cat in data.get("categories", []):
                 data["categories"].remove(target_cat)
-                data["expenses"] = [exp for exp in data.get("expenses", []) if exp.get("category") != target_cat]
+                data["expenses"] = [exp for exp in data.get("expenses", [])
+                                    if exp.get("category") != target_cat]
+                data.get("budgets", {}).pop(target_cat, None)
                 save_expense_data(data)
             refresh_expense_view()
 
     def toggle_settings_drawer(e):
         settings_compartment.visible = not settings_compartment.visible
-        settings_btn.icon_color      = "#FF4B4B" if settings_compartment.visible else "#66FCF1"
-        settings_btn.icon            = ft.Icons.CLOSE_ROUNDED if settings_compartment.visible else ft.Icons.SETTINGS_SUGGEST_ROUNDED
+        settings_btn.icon_color = "#FF4B4B" if settings_compartment.visible else "#66FCF1"
+        settings_btn.icon = (ft.Icons.CLOSE_ROUNDED if settings_compartment.visible
+                             else ft.Icons.SETTINGS_SUGGEST_ROUNDED)
         page.update()
 
     # ── MAIN REFRESH ─────────────────────────────────────────────────────────
@@ -424,75 +568,154 @@ def build_expenses(page: ft.Page):
         data         = load_expense_data()
         all_expenses = data.get("expenses", [])
         cats         = data.get("categories", ["Study", "Food", "Transport", "Other"])
+        budgets      = data.get("budgets", {})
 
-        filtered_items = get_filtered_expenses(all_expenses, current_filter_mode, selected_anchor_date)
+        filtered_items = get_filtered_expenses(all_expenses, current_filter_mode,
+                                               selected_anchor_date)
 
         populate_dropdowns()
         chart_canvas.sections      = get_pie_sections(filtered_items, cats)
-        filter_status_banner.value = get_filter_banner_string(current_filter_mode, selected_anchor_date)
+        filter_status_banner.value = get_filter_banner_string(current_filter_mode,
+                                                               selected_anchor_date)
 
-        total_spent        = sum(item[1].get("amount", 0.0) for item in filtered_items)
-        total_badge.value  = f"Selected Total: ৳{int(total_spent)}"
+        total_spent       = sum(item[1].get("amount", 0.0) for item in filtered_items)
+        total_badge.value = f"Selected Total: ৳{int(total_spent)}"
 
         legend_container.content      = build_legend_row(filtered_items, cats)
         ledger_container.content      = build_itemized_ledger(filtered_items, cats)
         trend_graph_container.content = build_styled_trend_graph(filtered_items)
 
+        # Budget progress — uses ALL-TIME totals so the bars reflect full spend
+        all_time_totals = _get_all_time_spent_by_cat()
+        budget_panel_container.content = build_budget_progress_panel(
+            cats, budgets, all_time_totals
+        )
+
         try:
             filter_status_banner.update(); total_badge.update()
             trend_graph_container.update(); chart_canvas.update()
             legend_container.update(); ledger_container.update()
+            budget_panel_container.update()
         except Exception:
             pass
 
     # ── UI CONTROLS ───────────────────────────────────────────────────────────
-    expense_title      = ft.TextField(label="Transaction Description...", label_style=ft.TextStyle(color="#45A29E"), border_color="#243142")
-    expense_amount     = ft.TextField(label="Amount...",                  label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=150)
-    category_dropdown  = ft.Dropdown(label="Category",                    label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
-
+    expense_title      = ft.TextField(
+        label="Transaction Description...",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142")
+    expense_amount     = ft.TextField(
+        label="Amount...",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=150)
+    category_dropdown  = ft.Dropdown(
+        label="Category",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
     expense_date_input = ft.TextField(
-        label="Entry Date (YYYY-MM-DD)", label_style=ft.TextStyle(color="#45A29E"),
+        label="Entry Date (YYYY-MM-DD)",
+        label_style=ft.TextStyle(color="#45A29E"),
         border_color="#243142", width=280, height=48, text_size=13,
-        value=selected_anchor_date.strftime("%Y-%m-%d")
-    )
+        value=selected_anchor_date.strftime("%Y-%m-%d"))
     btn_entry_date_picker = ft.IconButton(
         icon=ft.Icons.CALENDAR_TODAY_ROUNDED, icon_color="#45A29E", icon_size=20,
-        on_click=trigger_entry_calendar, tooltip="Select date for this entry"
-    )
+        on_click=trigger_entry_calendar, tooltip="Select date for this entry")
 
-    custom_cat_input    = ft.TextField(label="Add New...", label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
-    manage_cat_dropdown = ft.Dropdown(label="Erase...",   label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
+    custom_cat_input    = ft.TextField(
+        label="Add New...",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
+    manage_cat_dropdown = ft.Dropdown(
+        label="Erase...",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
 
-    submit_btn          = ft.FilledButton("Log Transaction", icon=ft.Icons.MONETIZATION_ON_ROUNDED, style=ft.ButtonStyle(bgcolor="#1F2833", color="#66FCF1"), on_click=add_expense_clicked)
-    total_badge         = ft.Text("Selected Total: ৳0", size=18, weight=ft.FontWeight.W_700, color="#66FCF1")
-    settings_btn        = ft.IconButton(ft.Icons.SETTINGS_SUGGEST_ROUNDED, icon_color="#66FCF1", on_click=toggle_settings_drawer)
-    filter_status_banner = ft.Text("", size=12, color="#45A29E", weight=ft.FontWeight.BOLD)
+    # Budget controls
+    budget_cat_dropdown = ft.Dropdown(
+        label="Category",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=140)
+    budget_amount_input = ft.TextField(
+        label="Budget (৳)",
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142",
+        width=120, height=44, text_size=13, keyboard_type=ft.KeyboardType.NUMBER)
+
+    submit_btn = ft.FilledButton(
+        "Log Transaction", icon=ft.Icons.MONETIZATION_ON_ROUNDED,
+        style=ft.ButtonStyle(bgcolor="#1F2833", color="#66FCF1"),
+        on_click=add_expense_clicked)
+    total_badge         = ft.Text("Selected Total: ৳0", size=18,
+                                   weight=ft.FontWeight.W_700, color="#66FCF1")
+    settings_btn        = ft.IconButton(
+        ft.Icons.SETTINGS_SUGGEST_ROUNDED, icon_color="#66FCF1",
+        on_click=toggle_settings_drawer)
+    export_btn          = ft.IconButton(
+        ft.Icons.DOWNLOAD_ROUNDED, icon_color="#45A29E",
+        tooltip="Export expenses to CSV", on_click=export_expenses_csv)
+    export_feedback     = ft.Text("", size=10, color="#8E9AA6")
+    filter_status_banner = ft.Text("", size=12, color="#45A29E",
+                                    weight=ft.FontWeight.BOLD)
 
     interval_filter_toggle = ft.CupertinoSegmentedButton(
         controls=[
-            ft.Text("Day Log",      size=11, weight=ft.FontWeight.W_600, width=70,  text_align=ft.TextAlign.CENTER),
-            ft.Text("Weekly Split", size=11, weight=ft.FontWeight.W_600, width=80,  text_align=ft.TextAlign.CENTER),
-            ft.Text("Monthly View", size=11, weight=ft.FontWeight.W_600, width=80,  text_align=ft.TextAlign.CENTER),
+            ft.Text("Day Log",      size=11, weight=ft.FontWeight.W_600,
+                    width=70, text_align=ft.TextAlign.CENTER),
+            ft.Text("Weekly Split", size=11, weight=ft.FontWeight.W_600,
+                    width=80, text_align=ft.TextAlign.CENTER),
+            ft.Text("Monthly View", size=11, weight=ft.FontWeight.W_600,
+                    width=80, text_align=ft.TextAlign.CENTER),
         ],
         selected_index=0, selected_color="#66FCF1", unselected_color="#1E2631",
         border_color="rgba(255,255,255,0.15)", on_change=filter_mode_shifted,
     )
 
-    btn_calendar_picker = ft.IconButton(icon=ft.Icons.CALENDAR_MONTH_ROUNDED,        icon_color="#66FCF1", icon_size=22, on_click=trigger_anchor_calendar)
-    btn_time_prev       = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_LEFT_ROUNDED,   icon_color="#66FCF1", icon_size=22, on_click=step_backward)
-    btn_time_next       = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED,  icon_color="#66FCF1", icon_size=22, on_click=step_forward)
+    btn_calendar_picker = ft.IconButton(
+        icon=ft.Icons.CALENDAR_MONTH_ROUNDED, icon_color="#66FCF1",
+        icon_size=22, on_click=trigger_anchor_calendar)
+    btn_time_prev = ft.IconButton(
+        icon=ft.Icons.KEYBOARD_ARROW_LEFT_ROUNDED, icon_color="#66FCF1",
+        icon_size=22, on_click=step_backward)
+    btn_time_next = ft.IconButton(
+        icon=ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED, icon_color="#66FCF1",
+        icon_size=22, on_click=step_forward)
+
+    # Budget progress panel (lives in main right column, always visible)
+    budget_panel_container = ft.Container(expand=True)
 
     settings_compartment = ft.Container(
         content=ft.Column([
-            ft.Text("Manage Categories Panel", size=14, weight=ft.FontWeight.BOLD, color="#66FCF1"),
-            ft.Row([custom_cat_input, ft.IconButton(ft.Icons.ADD_BOX_ROUNDED, icon_color="#66FCF1", on_click=add_new_cat_trigger)]),
-            ft.Row([manage_cat_dropdown, ft.IconButton(ft.Icons.DELETE_FOREVER_ROUNDED, icon_color="#FF4B4B", on_click=delete_cat_trigger)]),
+            # ── Category management ────────────────────────────────────────
+            ft.Text("Manage Categories", size=14,
+                    weight=ft.FontWeight.BOLD, color="#66FCF1"),
+            ft.Row([
+                custom_cat_input,
+                ft.IconButton(ft.Icons.ADD_BOX_ROUNDED,
+                              icon_color="#66FCF1", on_click=add_new_cat_trigger),
+            ]),
+            ft.Row([
+                manage_cat_dropdown,
+                ft.IconButton(ft.Icons.DELETE_FOREVER_ROUNDED,
+                              icon_color="#FF4B4B", on_click=delete_cat_trigger),
+            ]),
+            ft.Divider(height=10, color="#243142"),
+            # ── Budget setting ─────────────────────────────────────────────
+            ft.Text("Set Monthly Budget", size=14,
+                    weight=ft.FontWeight.BOLD, color="#66FCF1"),
+            ft.Row([
+                budget_cat_dropdown,
+                budget_amount_input,
+                ft.IconButton(ft.Icons.SAVE_ROUNDED,
+                              icon_color="#66FCF1",
+                              tooltip="Save budget",
+                              on_click=save_budget_clicked),
+            ], spacing=6),
+            ft.Text("Set 0 to remove a budget.", size=10,
+                    color="grey500", italic=True),
         ], spacing=8),
-        bgcolor="#11151D", padding=15, border_radius=12, visible=False, width=380,
-        border=ft.Border(ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#66FCF1"), ft.BorderSide(1, "#243142"))
+        bgcolor="#11151D", padding=15, border_radius=12,
+        visible=False, width=380,
+        border=ft.Border(
+            ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"),
+            ft.BorderSide(1, "#66FCF1"), ft.BorderSide(1, "#243142"),
+        ),
     )
 
-    chart_canvas          = fch.PieChart(sections=[], sections_space=3, center_space_radius=35, height=130)
+    chart_canvas          = fch.PieChart(sections=[], sections_space=3,
+                                          center_space_radius=35, height=130)
     chart_frame           = ft.Container(content=chart_canvas, width=150, height=130)
     legend_container      = ft.Container(padding=5)
     ledger_container      = ft.Container(expand=True)
@@ -502,36 +725,68 @@ def build_expenses(page: ft.Page):
     refresh_expense_view()
 
     master_layout = ft.Row([
+        # ── Left column: input form + settings ────────────────────────────
         ft.Column([
-            ft.Row([ft.Text("Expense Allocation Console", size=18, weight=ft.FontWeight.W_600, color="#45A29E"), settings_btn], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, width=380),
+            ft.Row([
+                ft.Text("Expense Allocation Console", size=18,
+                        weight=ft.FontWeight.W_600, color="#45A29E"),
+                ft.Row([export_btn, settings_btn], spacing=0),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, width=380),
+            export_feedback,
             ft.Container(
                 content=ft.Column([
                     expense_title,
                     ft.Row([expense_amount, category_dropdown], spacing=10),
-                    ft.Row([expense_date_input, btn_entry_date_picker], spacing=4, alignment=ft.MainAxisAlignment.CENTER),
+                    ft.Row([expense_date_input, btn_entry_date_picker],
+                           spacing=4, alignment=ft.MainAxisAlignment.CENTER),
                     ft.Container(content=submit_btn, padding=5),
                     ft.Divider(height=10, color="#243142"),
-                    ft.Row([btn_time_prev, filter_status_banner, btn_calendar_picker, btn_time_next], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Row([btn_time_prev, filter_status_banner,
+                            btn_calendar_picker, btn_time_next],
+                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                     interval_filter_toggle,
-                ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                bgcolor="#151A22", padding=20, border_radius=16, width=380, height=375,
-                border=ft.Border(ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"))
+                ], alignment=ft.MainAxisAlignment.CENTER,
+                   horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                bgcolor="#151A22", padding=20, border_radius=16,
+                width=380, height=375,
+                border=ft.Border(
+                    ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"),
+                    ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"),
+                ),
             ),
             settings_compartment,
         ], spacing=10, width=380),
+
         ft.VerticalDivider(width=30, color="#1F2833"),
+
+        # ── Right column: charts + ledger + budget bars ───────────────────
         ft.Column([
-            ft.Row([ft.Text("Categorical Distribution Engine", size=18, weight=ft.FontWeight.W_600, color="#45A29E"), total_badge], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([
+                ft.Text("Categorical Distribution Engine", size=18,
+                        weight=ft.FontWeight.W_600, color="#45A29E"),
+                total_badge,
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Container(
                 content=ft.Column([
-                    ft.Row([chart_frame, trend_graph_container], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, spacing=15),
+                    ft.Row([chart_frame, trend_graph_container],
+                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN, spacing=15),
                     legend_container,
-                    ft.Text("Itemized Ledger Summary", size=14, weight=ft.FontWeight.W_600, color="#8E9AA6"),
+                    ft.Divider(height=8, color="#243142"),
+                    # ── Budget progress bars ───────────────────────────────
+                    ft.Text("Monthly Budget Tracker", size=13,
+                            weight=ft.FontWeight.W_600, color="#8E9AA6"),
+                    budget_panel_container,
+                    ft.Divider(height=8, color="#243142"),
+                    ft.Text("Itemized Ledger Summary", size=14,
+                            weight=ft.FontWeight.W_600, color="#8E9AA6"),
                     ft.Divider(height=10, color="#243142"),
                     ledger_container,
                 ], expand=True, spacing=5),
                 padding=20, bgcolor="#151A22", border_radius=16, expand=True,
-                border=ft.Border(ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"))
+                border=ft.Border(
+                    ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"),
+                    ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"),
+                ),
             ),
         ], expand=True, spacing=10),
     ], expand=True)
