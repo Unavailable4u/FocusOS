@@ -2,7 +2,7 @@ import flet as ft
 import flet_charts as fch
 from datetime import datetime, timedelta
 from .engine import load_expense_data, save_expense_data, get_filter_date_range, get_filter_banner_string, get_filtered_expenses
-from .widgets import get_cat_color, build_daily_trend_graph
+from modules.color_palette import get_expense_color
 
 def build_expenses(page: ft.Page):
     editing_index        = -1
@@ -20,7 +20,6 @@ def build_expenses(page: ft.Page):
             if manage_cat_dropdown.value not in cats: manage_cat_dropdown.value = cats[0]
 
     # ── FILTER DATE PICKER (bottom section) ──────────────────────────────────
-    # Same UTC-midnight fix as dashboard: store on on_change, apply on on_dismiss.
     _pending_anchor = {"value": None}
 
     def handle_anchor_date_change(e):
@@ -32,7 +31,6 @@ def build_expenses(page: ft.Page):
         raw = _pending_anchor["value"]
         if raw is None:
             return
-        # Normalise: get plain date and add 1 day to correct Flet UTC-midnight shift
         if hasattr(raw, "date") and callable(raw.date):
             picked = raw.date() + timedelta(days=1)
         else:
@@ -94,8 +92,6 @@ def build_expenses(page: ft.Page):
 
     def step_backward(e):
         nonlocal selected_anchor_date
-        # FIX: no restriction on going to past dates — user should be able to
-        # navigate backwards freely to review old records.
         if current_filter_mode == "Day":
             selected_anchor_date -= timedelta(days=1)
         elif current_filter_mode == "Week":
@@ -127,7 +123,6 @@ def build_expenses(page: ft.Page):
             return
 
         saved_date_str = expense_date_input.value.strip()
-        # Validate the date string before saving
         try:
             datetime.strptime(saved_date_str, "%Y-%m-%d")
         except ValueError:
@@ -163,8 +158,6 @@ def build_expenses(page: ft.Page):
         expense_amount.value       = ""
         expense_amount.error_text  = None
 
-        # FIX: sync the FILTER anchor to the date just saved so the view
-        # immediately shows that day's data including the new entry.
         selected_anchor_date = datetime.strptime(saved_date_str, "%Y-%m-%d").date()
         refresh_expense_view()
 
@@ -181,7 +174,7 @@ def build_expenses(page: ft.Page):
                 pct = (total_amount / overall_total) * 100 if overall_total > 0 else 0
                 sections.append(fch.PieChartSection(
                     value=total_amount, title=f"{pct:.1f}%",
-                    color=get_cat_color(category), radius=40,
+                    color=get_expense_color(category), radius=40,
                     title_style=ft.TextStyle(size=11, color="#FFFFFF", weight=ft.FontWeight.BOLD)
                 ))
         if not sections:
@@ -197,7 +190,7 @@ def build_expenses(page: ft.Page):
         for cat, total in totals.items():
             if total > 0:
                 legend_items.append(ft.Row([
-                    ft.Container(width=10, height=10, bgcolor=get_cat_color(cat), border_radius=2),
+                    ft.Container(width=10, height=10, bgcolor=get_expense_color(cat), border_radius=2),
                     ft.Text(f"{cat} (৳{int(total)})", size=11, color="#E0E0E0")
                 ], spacing=4))
         return ft.Row(controls=legend_items, alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True)
@@ -209,7 +202,30 @@ def build_expenses(page: ft.Page):
             if cat not in grouped_items: grouped_items[cat] = []
             grouped_items[cat].append((original_idx, exp))
 
-        ledger_blocks = []
+        # ── Grand total banner ────────────────────────────────────────────────
+        grand_total   = sum(item[1].get("amount", 0.0) for item in filtered_items)
+        entry_count   = len(filtered_items)
+        grand_banner  = ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, color="#66FCF1", size=18),
+                ft.Text(
+                    f"Total Expenses: ৳{int(grand_total)}  ({entry_count} {'entry' if entry_count == 1 else 'entries'})",
+                    size=14, weight=ft.FontWeight.BOLD, color="#66FCF1"
+                ),
+            ], spacing=8),
+            bgcolor="#0D1117",
+            padding=ft.Padding(12, 8, 12, 8),
+            border_radius=8,
+            border=ft.Border(
+                ft.BorderSide(1, "#243142"),
+                ft.BorderSide(1, "#243142"),
+                ft.BorderSide(1, "#243142"),
+                ft.BorderSide(2, "#66FCF1"),   # cyan left accent
+            ),
+        )
+
+        ledger_blocks = [grand_banner]
+
         for category, items in grouped_items.items():
             if not items: continue
             block_subtotal = sum(item[1].get("amount", 0.0) for item in items)
@@ -252,23 +268,29 @@ def build_expenses(page: ft.Page):
             ledger_blocks.append(ft.Container(
                 content=ft.Column([
                     ft.Row([
-                        ft.Row([ft.Icon(ft.Icons.LABEL_IMPORTANT_ROUNDED, color=get_cat_color(category), size=18), ft.Text(category, size=15, weight=ft.FontWeight.BOLD, color=get_cat_color(category))]),
+                        ft.Row([ft.Icon(ft.Icons.LABEL_IMPORTANT_ROUNDED, color=get_expense_color(category), size=18), ft.Text(category, size=15, weight=ft.FontWeight.BOLD, color=get_expense_color(category))]),
                         ft.Text(f"Subtotal: ৳{int(block_subtotal)}", size=13, weight=ft.FontWeight.W_600, color="#FFFFFF"),
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                     ft.Divider(height=5, color="#1F2833"),
                     ft.Column(controls=item_rows, spacing=2),
                 ]),
                 bgcolor="#1A212B", padding=10, border_radius=8,
-                border=ft.Border(ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, get_cat_color(category)), ft.BorderSide(1, "#243142"))
+                border=ft.Border(ft.BorderSide(1, "#243142"), ft.BorderSide(1, "#243142"), ft.BorderSide(1, get_expense_color(category)), ft.BorderSide(1, "#243142"))
             ))
 
-        if not ledger_blocks:
-            return ft.Container(content=ft.Text("No records found.", color="grey500"), alignment=ft.Alignment(0, 0), padding=20)
+        if len(ledger_blocks) == 1:
+            # Only the banner — no actual records
+            return ft.Column(controls=[
+                grand_banner,
+                ft.Container(content=ft.Text("No records found.", color="grey500"), alignment=ft.Alignment(0, 0), padding=20)
+            ], spacing=8)
+
         return ft.Column(controls=ledger_blocks, spacing=10, scroll=ft.ScrollMode.ADAPTIVE)
 
     # ── STYLED TREND BAR CHART ────────────────────────────────────────────────
     def build_styled_trend_graph(filtered_items):
-        """Improved bar chart: taller bars, category colours, rounded tops, amount labels."""
+        """Bar chart with per-category colours, amount labels above each bar,
+        and an AVG bar appended when the filter mode is Week or Month."""
         day_totals     = {}
         day_categories = {}
         for _, exp in filtered_items:
@@ -285,41 +307,78 @@ def build_expenses(page: ft.Page):
                 alignment=ft.alignment.Alignment(0, 0), padding=20
             )
 
+        show_avg    = current_filter_mode in ("Week", "Month")
+        avg_val     = sum(day_totals.values()) / len(day_totals) if day_totals else 0.0
+
+        # Use the real max (or avg if that's larger) to size bars consistently
         max_val  = max(day_totals.values()) if day_totals else 1.0
+        if show_avg:
+            max_val = max(max_val, avg_val)
+
         columns  = []
         MAX_BAR_H = 120
 
-        for day_stamp in sorted(day_totals.keys()):
-            total_amt      = day_totals[day_stamp]
-            total_bar_h    = max(6, int((total_amt / max_val) * MAX_BAR_H))
-            cats_today     = day_categories.get(day_stamp, {})
-            segments       = []
+        def _make_bar_column(day_stamp, total_amt, cats_today, label_text, bar_color_override=None):
+            total_bar_h = max(6, int((total_amt / max_val) * MAX_BAR_H)) if max_val else 6
+            segments    = []
 
-            for cat_name, cat_amt in sorted(cats_today.items(), key=lambda x: x[0].lower()):
-                if cat_amt > 0:
-                    seg_h = max(4, int((cat_amt / total_amt) * total_bar_h))
-                    segments.append(ft.Container(
-                        width=32, height=seg_h,
-                        bgcolor=get_cat_color(cat_name),
-                        border_radius=ft.BorderRadius(3, 3, 0, 0) if cat_name == list(cats_today.keys())[-1] else 0,
-                        tooltip=f"{cat_name}: ৳{int(cat_amt)}"
-                    ))
+            if bar_color_override:
+                # Single-colour bar (AVG bar)
+                segments.append(ft.Container(
+                    width=32, height=total_bar_h,
+                    bgcolor=bar_color_override,
+                    border_radius=ft.BorderRadius(3, 3, 0, 0),
+                    tooltip=f"Daily Average: ৳{int(total_amt)}"
+                ))
+            else:
+                sorted_cats = sorted(cats_today.items(), key=lambda x: x[0].lower())
+                last_cat    = sorted_cats[-1][0] if sorted_cats else None
+                for cat_name, cat_amt in sorted_cats:
+                    if cat_amt > 0:
+                        seg_h = max(4, int((cat_amt / total_amt) * total_bar_h))
+                        segments.append(ft.Container(
+                            width=32, height=seg_h,
+                            bgcolor=get_expense_color(cat_name),
+                            border_radius=ft.BorderRadius(3, 3, 0, 0) if cat_name == last_cat else 0,
+                            tooltip=f"{cat_name}: ৳{int(cat_amt)}"
+                        ))
 
             transparent_h = MAX_BAR_H - total_bar_h
+
+            return ft.Column([
+                ft.Container(width=32, height=transparent_h, bgcolor="transparent"),
+                ft.Container(
+                    content=ft.Text(
+                        f"৳{int(total_amt)}", size=8, color="#FFFFFF",
+                        weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER
+                    ),
+                    width=36, alignment=ft.alignment.Alignment(0, 0)
+                ),
+                ft.Column(controls=segments, spacing=0, alignment=ft.MainAxisAlignment.END),
+                ft.Text(label_text, size=9, color="#8E9AA6", weight=ft.FontWeight.BOLD),
+            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+        for day_stamp in sorted(day_totals.keys()):
+            total_amt  = day_totals[day_stamp]
+            cats_today = day_categories.get(day_stamp, {})
             try:
                 day_label = datetime.strptime(day_stamp, "%Y-%m-%d").strftime("%d")
             except ValueError:
                 day_label = day_stamp[-2:]
+            columns.append(_make_bar_column(day_stamp, total_amt, cats_today, day_label))
 
+        # ── AVG bar (Week / Month only) ────────────────────────────────────
+        if show_avg and avg_val > 0:
+            # Vertical dashed separator
             columns.append(ft.Column([
-                ft.Container(width=32, height=transparent_h, bgcolor="transparent"),
-                ft.Container(
-                    content=ft.Text(f"৳{int(total_amt)}", size=8, color="#FFFFFF", weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
-                    width=36, alignment=ft.alignment.Alignment(0, 0)
-                ),
-                ft.Column(controls=segments, spacing=0, alignment=ft.MainAxisAlignment.END),
-                ft.Text(day_label, size=9, color="#8E9AA6", weight=ft.FontWeight.BOLD),
-            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+                ft.Container(width=1, height=MAX_BAR_H + 20, bgcolor="#243142"),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+
+            columns.append(_make_bar_column(
+                day_stamp="avg", total_amt=avg_val,
+                cats_today={}, label_text="AVG",
+                bar_color_override="#45A29E"
+            ))
 
         return ft.Container(
             content=ft.Column([
@@ -362,17 +421,14 @@ def build_expenses(page: ft.Page):
 
     # ── MAIN REFRESH ─────────────────────────────────────────────────────────
     def refresh_expense_view():
-        # FIX: removed the forced reset to today — users must be able to view
-        # past dates freely. No clamping of selected_anchor_date.
         data         = load_expense_data()
         all_expenses = data.get("expenses", [])
         cats         = data.get("categories", ["Study", "Food", "Transport", "Other"])
 
-        # selected_anchor_date is always a plain date — pass it directly
         filtered_items = get_filtered_expenses(all_expenses, current_filter_mode, selected_anchor_date)
 
         populate_dropdowns()
-        chart_canvas.sections    = get_pie_sections(filtered_items, cats)
+        chart_canvas.sections      = get_pie_sections(filtered_items, cats)
         filter_status_banner.value = get_filter_banner_string(current_filter_mode, selected_anchor_date)
 
         total_spent        = sum(item[1].get("amount", 0.0) for item in filtered_items)

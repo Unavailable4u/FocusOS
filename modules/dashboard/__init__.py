@@ -53,7 +53,7 @@ def build_dashboard(page: ft.Page):
         task_distribution_panel.content = build_proportional_share_panel("Task Category Volume Distribution Share", m["task_time_breakdown"], is_currency=False)
         expense_distribution_panel.content = build_proportional_share_panel("Capital Resource Cost Proportional Allocation", m["category_expense_breakdown"], is_currency=True)
 
-        expense_bar_graph.content        = build_expense_trend_graph(display_dates, raw_db_data.get("expenses", []))
+        expense_bar_graph.content        = build_expense_trend_graph(current_interval, display_dates, raw_db_data.get("expenses", []))
         monthly_horizontal_graph.content = build_monthly_horizontal_focus_graph(raw_db_data.get("hourly_task_distribution", {}))
 
         try:
@@ -145,16 +145,19 @@ def build_dashboard(page: ft.Page):
     btn_next     = ft.IconButton(icon=ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED, icon_color="grey700", icon_size=22, on_click=step_forward, disabled=True)
     btn_calendar = ft.IconButton(icon=ft.Icons.CALENDAR_MONTH_ROUNDED,       icon_color="#00FFFF", icon_size=22, on_click=trigger_anchor_calendar)
 
-    repaint_dashboard_ui()
-
-    dashboard_layout_view = ft.Column([
-        ft.Row([
+    header_bar = ft.Container(
+        content=ft.Row([
             ft.Column([
                 ft.Text("Comprehensive Performance Dashboard Engine", size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
                 dashboard_subtitle_lbl,
             ], spacing=2),
             ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        bgcolor="#1E2631",
+        padding=ft.Padding(left=4, right=4, top=10, bottom=10),
+    )
+
+    dashboard_scroll_body = ft.Column([
         ft.Container(height=10),
         ft.Row([card_focus, card_tasks, card_expenses], spacing=12),
         ft.Container(height=5),
@@ -167,6 +170,12 @@ def build_dashboard(page: ft.Page):
         expense_bar_graph,
         ft.Container(height=5),
     ], expand=True, scroll=ft.ScrollMode.ALWAYS)
+
+    dashboard_layout_view = ft.Column(
+        [header_bar, dashboard_scroll_body],
+        expand=True,
+        spacing=0,
+    )
 
     async def snap_inner_matrix_to_end_async():
         await asyncio.sleep(0.15)
@@ -183,5 +192,7 @@ def build_dashboard(page: ft.Page):
 
     import threading
     threading.Thread(target=schedule_native_callback, daemon=True).start()
+
+    repaint_dashboard_ui()
 
     return dashboard_layout_view

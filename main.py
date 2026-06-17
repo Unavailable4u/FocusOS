@@ -54,10 +54,7 @@ def main(page: ft.Page):
     )
 
     # Default initial content area load state mapping configuration (Overview)
-    content_area.content = ft.Container(
-        content=ft.Text("Dashboard Workspace Panel", size=20, color="#FFFFFF", weight=ft.FontWeight.BOLD),
-        alignment=ft.alignment.Alignment(0, 0)
-    )
+    content_area.content = build_dashboard(page)
 
     main_layout_frame = ft.Container(
         content=ft.Row([

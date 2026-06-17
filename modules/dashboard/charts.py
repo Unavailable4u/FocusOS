@@ -1,5 +1,5 @@
 import flet as ft
-from .timelines import get_task_color
+from modules.color_palette import get_unified_color
 
 def create_stat_card(title, value, subtitle, color):
     return ft.Container(
@@ -27,7 +27,7 @@ def build_proportional_share_panel(title, allocation_dict, is_currency=False):
     for name, val in sorted_items:
         # Prevent division-by-zero errors if total volume on this targeted date is 0
         share = (val / total_volume) if total_volume > 0 else 0.0
-        seg_color = get_task_color(name)
+        seg_color = get_unified_color(name)
         
         if val > 0:
             tooltip_str = f"{name}: ৳{val:,.2f}" if is_currency else f"{name}: {int(val)}m"

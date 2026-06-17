@@ -1,17 +1,7 @@
 import flet as ft
 from datetime import datetime
+from modules.color_palette import get_expense_color
 
-# Define the color map used by your expenses module
-COLOR_MAP = {
-    "Study": "#66FCF1", 
-    "Food": "#FF4B4B", 
-    "Transport": "#BB86FC", 
-    "Other": "#95A5A6"
-}
-
-def get_cat_color(cat):
-    """Returns the color for a given category."""
-    return COLOR_MAP.get(cat, "#45A29E")
 
 def build_daily_trend_graph(filtered_items):
     """
@@ -21,7 +11,7 @@ def build_daily_trend_graph(filtered_items):
     for idx, exp in filtered_items:
         date_str = exp.get("date", datetime.now().strftime("%Y-%m-%d"))
         day_totals[date_str] = day_totals.get(date_str, 0.0) + exp.get("amount", 0.0)
-        
+
     columns = []
     # Sort dates to ensure the graph displays correctly
     for day_stamp in sorted(day_totals.keys()):
@@ -40,10 +30,10 @@ def build_daily_trend_graph(filtered_items):
                 ft.Text(label, size=9, color="#8E9AA6")
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         )
-        
+
     return ft.Container(
         content=ft.Row(
-            controls=columns if columns else [ft.Text("No data to plot", color="grey")], 
+            controls=columns if columns else [ft.Text("No data to plot", color="grey")],
             scroll=ft.ScrollMode.ADAPTIVE
         ),
         padding=10

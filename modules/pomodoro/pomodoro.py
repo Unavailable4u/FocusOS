@@ -11,34 +11,30 @@ if PROJECT_ROOT not in sys.path:
 
 import data_manager as dm
 from modules.glass_theme import GLASS_THEMES, create_glass_card
+from modules.color_palette import get_task_color
 from .clock_face import generate_precision_radial_clock
 
 _global_timer_session = None
 
-# UPGRADED PALETTE: Pure high-contrast, vibrant neon hex design tokens
-TASK_COLORS = ["#00FFFF", "#1A73E8", "#FF9100", "#FF1744", "#00E676", "#FF4081", "#FFEA00", "#D500F9"]
 
-GLOBAL_TASK_COLOR_MAP = {
-    "General Study": "#00FFFF",
-    "Study": "#00FFFF",
-    "Food": "#FF1744",        # Vivid Red
-    "Transport": "#D500F9",   # Vibrant Purple
-    "tyaystyryt": "#FF4081",  # Vibrant Hot Pink
-    "Other": "#95A5A6"
-}
+def _get_task_color(task_name):
+    """
+    Single source-of-truth color lookup for this page.
+    Delegates to modules/color_palette.py so focus bars, the clock view,
+    and the legend all share exactly the same hues as the rest of the app.
 
-def get_task_color_signature(task_name):
-    """Cross-references database entries to return corresponding high-contrast hex design tokens."""
-    if task_name in GLOBAL_TASK_COLOR_MAP:
-        return GLOBAL_TASK_COLOR_MAP[task_name]
+    Passes the current list of DB task titles as `all_known_tasks` so
+    overflow colors are assigned by stable index (matching legacy
+    get_task_color_signature behavior) rather than pure hash, wherever
+    possible.
+    """
     try:
         data = dm.load_data()
         db_tasks = [t["title"] for t in data.get("tasks", [])]
-        if task_name in db_tasks:
-            idx = db_tasks.index(task_name) + 1
-            return TASK_COLORS[idx % len(TASK_COLORS)]
-    except Exception: pass
-    return "#00FFFF"
+    except Exception:
+        db_tasks = []
+    return get_task_color(task_name, all_known_tasks=db_tasks)
+
 
 def build_pomodoro(page: ft.Page):
     global _global_timer_session
@@ -53,6 +49,7 @@ def build_pomodoro(page: ft.Page):
             "completed_sprints": 0,               
             "active_view": "Bars",
             "active_theme": "Glass Cyan",
+            "selected_task": "General Study",
             "live_timer_text": None,
             "live_progress_bar": None
         }
@@ -74,8 +71,8 @@ def build_pomodoro(page: ft.Page):
         target_text = state["live_timer_text"] if state["live_timer_text"] else timer_text
         target_progress = state["live_progress_bar"] if state["live_progress_bar"] else progress_bar
         
-        selected_task = task_dropdown.value if task_dropdown.value else "General Study"
-        active_color_token = get_task_color_signature(selected_task)
+        selected_task = state["selected_task"]
+        active_color_token = _get_task_color(selected_task)
 
         if state["current_mode"] == "Focus":
             current_sprint_total = min(25 * 60, state["total_focus_remaining"] + state["current_segment_elapsed"])
@@ -111,7 +108,7 @@ def build_pomodoro(page: ft.Page):
                     state["total_focus_remaining"] -= 1
                     state["current_segment_elapsed"] += 1
                     if state["current_segment_elapsed"] % 60 == 0:
-                        selected_task = task_dropdown.value if task_dropdown.value else "General Study"
+                        selected_task = state["selected_task"]
                         dm.log_focus(selected_task, 1)
                         log_hourly_metric(datetime.now().hour, selected_task, 1)
                         refresh_analytics_display()
@@ -157,8 +154,8 @@ def build_pomodoro(page: ft.Page):
         state["current_mode"] = "Focus"
         state["current_segment_elapsed"] = 0
         
-        selected_task = task_dropdown.value if task_dropdown.value else "General Study"
-        target_text.color = get_task_color_signature(selected_task)
+        selected_task = state["selected_task"]
+        target_text.color = _get_task_color(selected_task)
         
         status_badge.value = "Status: Continuing Focus Pool... 🎯"
         start_btn.visible, stop_btn.visible, skip_break_btn.visible = False, True, False
@@ -174,8 +171,8 @@ def build_pomodoro(page: ft.Page):
             state["timer_running"] = True
             target_text = state["live_timer_text"] if state["live_timer_text"] else timer_text
             
-            selected_task = task_dropdown.value if task_dropdown.value else "General Study"
-            target_text.color = get_task_color_signature(selected_task)
+            state["selected_task"] = task_dropdown.value if task_dropdown.value else "General Study"
+            target_text.color = _get_task_color(state["selected_task"])
             
             start_btn.disabled, stop_btn.disabled = True, False
             toggle_inputs(disabled=True)
@@ -258,11 +255,13 @@ def build_pomodoro(page: ft.Page):
         today_distribution = distribution.get(today, {})
         target_hours = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
         columns = []
-        
+        hour_totals = []
+
         for hour in target_hours:
             hour_dict = today_distribution.get(str(hour), {})
             total_mins = sum(hour_dict.values()) if isinstance(hour_dict, dict) else 0
-            
+            hour_totals.append(total_mins)
+
             total_bar_height = max(4, int((total_mins / 60) * 180))
             transparent_space_height = 180 - total_bar_height
             stacked_segments = []
@@ -272,7 +271,7 @@ def build_pomodoro(page: ft.Page):
                     if task_mins > 0:
                         segment_ratio = task_mins / total_mins
                         segment_height = max(2, int(segment_ratio * total_bar_height))
-                        segment_color = get_task_color_signature(task_name)
+                        segment_color = _get_task_color(task_name)
                         
                         stacked_segments.append(
                             ft.Container(
@@ -290,11 +289,38 @@ def build_pomodoro(page: ft.Page):
 
             columns.append(
                 ft.Column([
+                    ft.Text(f"{int(total_mins)}m" if total_mins > 0 else "", size=8, color="#FFFFFF", weight=ft.FontWeight.W_500),
                     ft.Container(width=18, height=transparent_space_height, bgcolor="transparent"),
                     ft.Column(controls=stacked_segments, spacing=1, alignment=ft.MainAxisAlignment.END),
                     ft.Text(f"{hour:02d}", size=9, color="#FFFFFF", weight=ft.FontWeight.BOLD)
-                ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+                ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
             )
+
+        # AVG reference bar — always rendered, in every view, so the day's
+        # average load per sampled hour is visible alongside the real bars.
+        avg_mins = (sum(hour_totals) / len(hour_totals)) if hour_totals else 0
+        avg_bar_height = max(4, int((avg_mins / 60) * 180))
+        avg_transparent_height = 180 - avg_bar_height
+        avg_border = ft.Border(
+            top=ft.BorderSide(1, "#FFD54F"), bottom=ft.BorderSide(1, "#FFD54F"),
+            left=ft.BorderSide(1, "#FFD54F"), right=ft.BorderSide(1, "#FFD54F")
+        )
+
+        columns.append(
+            ft.Column([
+                ft.Text(f"{int(avg_mins)}m" if avg_mins > 0 else "", size=8, color="#FFD54F", weight=ft.FontWeight.W_500),
+                ft.Container(width=18, height=avg_transparent_height, bgcolor="transparent"),
+                ft.Container(
+                    width=18,
+                    height=avg_bar_height,
+                    bgcolor="rgba(255,213,79,0.18)",
+                    border_radius=2,
+                    border=avg_border,
+                    tooltip=f"Average across sampled hours: {int(avg_mins)}m"
+                ),
+                ft.Text("AVG", size=9, color="#FFD54F", weight=ft.FontWeight.BOLD)
+            ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        )
             
         return ft.Row(controls=columns, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, expand=True)
 
@@ -310,7 +336,7 @@ def build_pomodoro(page: ft.Page):
         
         legend_items = []
         for task_name, total_mins in task_totals.items():
-            color = get_task_color_signature(task_name)
+            color = _get_task_color(task_name)
             legend_items.append(
                 ft.Row([
                     ft.Container(width=10, height=10, bgcolor=color, border_radius=2),
@@ -333,7 +359,7 @@ def build_pomodoro(page: ft.Page):
             for hour_data in today_dist.values():
                 if isinstance(hour_data, dict):
                     for t in hour_data.keys():
-                        clock_color_map[t] = get_task_color_signature(t)
+                        clock_color_map[t] = _get_task_color(t)
 
             if state["active_view"] == "Bars":
                 chart_container_frame.content = generate_custom_bars()
@@ -349,6 +375,7 @@ def build_pomodoro(page: ft.Page):
         except Exception: pass
 
     def on_task_changed(e):
+        state["selected_task"] = task_dropdown.value if task_dropdown.value else "General Study"
         update_timer_display()
 
     # --- UI CONTROLS INITIALIZATION ---
@@ -374,6 +401,17 @@ def build_pomodoro(page: ft.Page):
     task_options = [ft.dropdown.Option("General Study")] + [ft.dropdown.Option(t["title"]) for t in db_tasks if not t["completed"]]
     
     task_dropdown = ft.Dropdown(label="Link Focus Session to Objective", label_style=ft.TextStyle(color="#00FFFF"), value="General Study", options=task_options, border_color="rgba(255,255,255,0.2)", width=340, on_select=on_task_changed)
+
+    # Restore the previously selected task (survives tab switches). If the
+    # remembered task no longer exists as a valid option (e.g. it was
+    # completed/removed from the DB), fall back safely to General Study.
+    valid_task_keys = [opt.key for opt in task_options]
+    if state["selected_task"] in valid_task_keys:
+        task_dropdown.value = state["selected_task"]
+    else:
+        state["selected_task"] = "General Study"
+        task_dropdown.value = "General Study"
+
     theme_dropdown = ft.Dropdown(label="Customize Glass Tint", label_style=ft.TextStyle(color="#00FFFF"), value=state["active_theme"], options=[ft.dropdown.Option(t) for t in GLASS_THEMES.keys()], border_color="rgba(255,255,255,0.2)", width=340, on_select=change_page_atmosphere)
 
     view_toggle = ft.CupertinoSegmentedButton(
@@ -397,7 +435,7 @@ def build_pomodoro(page: ft.Page):
     for hour_data in today_distribution_data.values():
         if isinstance(hour_data, dict):
             for t in hour_data.keys():
-                clock_color_map[t] = get_task_color_signature(t)
+                clock_color_map[t] = _get_task_color(t)
 
     if state["active_view"] == "Bars":
         frame_content_view = generate_custom_bars()
@@ -419,8 +457,8 @@ def build_pomodoro(page: ft.Page):
 
     if state["timer_running"]:
         start_btn.disabled, stop_btn.disabled = True, False
-        selected_task = task_dropdown.value if task_dropdown.value else "General Study"
-        active_color = get_task_color_signature(selected_task)
+        selected_task = state["selected_task"]
+        active_color = _get_task_color(selected_task)
         if state["current_mode"] == "Focus":
             timer_text.color = active_color
             status_badge.value = "Status: Continuing Focus Pool... 🎯"
