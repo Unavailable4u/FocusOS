@@ -386,10 +386,12 @@ def build_pomodoro(page: ft.Page):
     state["live_timer_text"] = timer_text
     state["live_progress_bar"] = progress_bar
 
-    focus_input = ft.TextField(label="Work (Min)", value="150", label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13, on_change=apply_config_changes)
-    short_break_input = ft.TextField(label="Short (Min)", value="5", label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13)
-    long_break_input = ft.TextField(label="Long (Min)", value="15", label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13)
-    interval_input = ft.TextField(label="Interval", value="3", label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13)
+    default_durations = dm.get_settings().get("default_durations", {})
+
+    focus_input = ft.TextField(label="Work (Min)", value=str(default_durations.get("focus", 150)), label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13, on_change=apply_config_changes)
+    short_break_input = ft.TextField(label="Short (Min)", value=str(default_durations.get("short", 5)), label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13)
+    long_break_input = ft.TextField(label="Long (Min)", value=str(default_durations.get("long", 15)), label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13)
+    interval_input = ft.TextField(label="Interval", value=str(default_durations.get("interval", 3)), label_style=ft.TextStyle(color="#00FFFF"), border_color="rgba(255,255,255,0.2)", width=75, height=40, text_size=13)
 
     start_btn = ft.FilledButton("Start Focus", icon=ft.Icons.PLAY_ARROW_ROUNDED, style=ft.ButtonStyle(bgcolor="rgba(255,255,255,0.15)", color="#00FFFF"), disabled=state["timer_running"], on_click=start_timer)
     stop_btn = ft.FilledButton("Pause", icon=ft.Icons.PAUSE_ROUNDED, style=ft.ButtonStyle(bgcolor="rgba(255,255,255,0.15)", color="#FF1744"), disabled=not state["timer_running"], on_click=stop_timer)

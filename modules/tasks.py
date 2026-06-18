@@ -10,6 +10,8 @@ except ModuleNotFoundError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import data_manager as dm
 
+from modules.glass_theme import create_glass_card
+
 def build_tasks(page: ft.Page):
     editing_task_id = -1
     expanded_comments = {}
@@ -235,8 +237,8 @@ def build_tasks(page: ft.Page):
 
         readable_time = format_total_time(total_minutes)
 
-        return ft.Container(
-            content=ft.Column([
+        content = ft.Column([
+                ft.Container(height=3, bgcolor=config["color"], border_radius=ft.BorderRadius(top_left=8, top_right=8, bottom_left=0, bottom_right=0)),
                 ft.Row([
                     ft.Row([
                         ft.Icon(ft.Icons.LABEL_IMPORTANT_ROUNDED, color=config["color"], size=18),
@@ -246,10 +248,8 @@ def build_tasks(page: ft.Page):
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ft.Divider(height=8, color="#1F2833"),
                 ft.Column(controls=item_rows, spacing=4)
-            ]),
-            bgcolor="#151A22", padding=12, border_radius=10,
-            border=ft.Border(top=ft.BorderSide(2, config["color"]), bottom=ft.BorderSide(1, "#243142"), left=ft.BorderSide(1, "#243142"), right=ft.BorderSide(1, "#243142"))
-        )
+            ])
+        return create_glass_card(content, theme_name=None)
 
     def build_compact_status_block(title_text, filter_type, accent_color):
         data = dm.load_data()
@@ -280,19 +280,16 @@ def build_tasks(page: ft.Page):
 
         readable_time = format_total_time(total_minutes)
 
-        return ft.Container(
-            content=ft.Column([
+        content = ft.Column([
+                ft.Container(height=3, bgcolor=accent_color, border_radius=ft.BorderRadius(top_left=8, top_right=8, bottom_left=0, bottom_right=0)),
                 ft.Row([
                     ft.Icon(ft.Icons.GRID_VIEW_ROUNDED, color=accent_color, size=16),
-                    # FIXED: Changed from high-order em-dash to standard standard layout colon separator
                     ft.Text(f"{title_text} ({len(filtered_items)}) : {readable_time}", size=14, weight=ft.FontWeight.BOLD, color=accent_color),
                 ], spacing=8),
                 ft.Divider(height=8, color="#1F2833"),
                 ft.Column(controls=filtered_items, spacing=2)
-            ]),
-            bgcolor="#11151D", padding=12, border_radius=10,
-            border=ft.Border(top=ft.BorderSide(1, accent_color), bottom=ft.BorderSide(1, "#243142"), left=ft.BorderSide(1, "#243142"), right=ft.BorderSide(1, "#243142"))
-        )
+            ])
+        return create_glass_card(content, theme_name=None)
 
     def refresh_matrix_boards(is_initial_load=True):
         left_blocks = []

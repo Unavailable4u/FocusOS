@@ -3,7 +3,7 @@ from datetime import datetime
 from modules.color_palette import get_expense_color
 
 
-def build_daily_trend_graph(filtered_items):
+def build_daily_trend_graph(filtered_items, currency_symbol="৳"):
     """
     Builds the trend graph widget based on filtered expense items.
     """
@@ -25,7 +25,7 @@ def build_daily_trend_graph(filtered_items):
             ft.Column([
                 ft.Container(
                     width=28, height=60, bgcolor="#FFB74D", border_radius=3,
-                    tooltip=f"Date: {day_stamp}\nTotal: ৳{int(total_amt)}"
+                    tooltip=f"Date: {day_stamp}\nTotal: {currency_symbol}{int(total_amt)}"
                 ),
                 ft.Text(label, size=9, color="#8E9AA6")
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)

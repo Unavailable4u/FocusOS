@@ -103,7 +103,7 @@ def build_journal(page: ft.Page) -> ft.Control:
             bgcolor="#1E2631",
             border_radius=10,
             padding=14,
-            border=ft.border.all(1, border_color),
+            border=ft.Border.all(1, border_color),
         )
 
     def _reload_entries():
@@ -199,7 +199,7 @@ def build_journal(page: ft.Page) -> ft.Control:
         bgcolor="#151B25",
         border_radius=12,
         padding=18,
-        border=ft.border.all(1, "rgba(255,255,255,0.08)"),
+        border=ft.Border.all(1, "rgba(255,255,255,0.08)"),
     )
 
     # ── Past entries section ──────────────────────────────────────────────────

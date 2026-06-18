@@ -3,6 +3,7 @@ import flet_charts as fch
 import os
 import csv
 from datetime import datetime, timedelta
+import data_manager as dm
 from .engine import load_expense_data, save_expense_data, get_filter_date_range, get_filter_banner_string, get_filtered_expenses
 from modules.color_palette import get_expense_color
 
@@ -24,6 +25,7 @@ def build_expenses(page: ft.Page):
     editing_index        = -1
     current_filter_mode  = "Day"
     selected_anchor_date = datetime.now().date()
+    currency_symbol      = dm.get_currency_symbol()
 
     def populate_dropdowns():
         data = load_expense_data()
@@ -236,7 +238,7 @@ def build_expenses(page: ft.Page):
             totals[cat] = totals.get(cat, 0.0) + float(exp.get("amount", 0.0))
         return totals
 
-    def build_budget_progress_panel(cats: list, budgets: dict, all_time_totals: dict):
+    def build_budget_progress_panel(cats: list, budgets: dict, all_time_totals: dict, currency_symbol: str):
         """
         For every category that has a budget set, render a labelled
         progress bar showing spent vs budget.
@@ -251,7 +253,7 @@ def build_expenses(page: ft.Page):
             color  = _budget_bar_color(spent / budget if budget > 0 else 0)
             pct    = int((spent / budget) * 100) if budget > 0 else 0
 
-            status_text = (f"৳{int(spent)} / ৳{int(budget)}  ({pct}%)"
+            status_text = (f"{currency_symbol}{int(spent)} / {currency_symbol}{int(budget)}  ({pct}%)"
                            + (" ⚠ OVER BUDGET" if spent > budget else ""))
 
             rows.append(ft.Container(
@@ -308,7 +310,7 @@ def build_expenses(page: ft.Page):
                                                  color="#243142", radius=30))
         return sections
 
-    def build_legend_row(filtered_items, cats):
+    def build_legend_row(filtered_items, cats, currency_symbol: str):
         totals = {c: 0.0 for c in cats}
         for _, exp in filtered_items:
             cat = exp.get("category", "Other")
@@ -319,12 +321,12 @@ def build_expenses(page: ft.Page):
                 items.append(ft.Row([
                     ft.Container(width=10, height=10,
                                  bgcolor=get_expense_color(cat), border_radius=2),
-                    ft.Text(f"{cat} (৳{int(total)})", size=11, color="#E0E0E0"),
+                    ft.Text(f"{cat} ({currency_symbol}{int(total)})", size=11, color="#E0E0E0"),
                 ], spacing=4))
         return ft.Row(controls=items, alignment=ft.MainAxisAlignment.CENTER,
                       spacing=10, wrap=True)
 
-    def build_itemized_ledger(filtered_items, cats):
+    def build_itemized_ledger(filtered_items, cats, currency_symbol: str):
         grouped_items = {c: [] for c in cats}
         for original_idx, exp in filtered_items:
             cat = exp.get("category", "Other")
@@ -337,7 +339,7 @@ def build_expenses(page: ft.Page):
             content=ft.Row([
                 ft.Icon(ft.Icons.RECEIPT_LONG_ROUNDED, color="#66FCF1", size=18),
                 ft.Text(
-                    f"Total Expenses: ৳{int(grand_total)}  "
+                    f"Total Expenses: {currency_symbol}{int(grand_total)}  "
                     f"({entry_count} {'entry' if entry_count == 1 else 'entries'})",
                     size=14, weight=ft.FontWeight.BOLD, color="#66FCF1",
                 ),
@@ -391,7 +393,7 @@ def build_expenses(page: ft.Page):
                         ft.Text(f"{item.get('title')}", size=14, color="#E0E0E0"),
                     ], spacing=4),
                     ft.Row([
-                        ft.Text(f"৳{int(item.get('amount'))}", size=14,
+                        ft.Text(f"{currency_symbol}{int(item.get('amount'))}", size=14,
                                 weight=ft.FontWeight.W_500, color="#66FCF1"),
                         ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16,
                                       icon_color="#45A29E", on_click=make_edit_handler()),
@@ -409,7 +411,7 @@ def build_expenses(page: ft.Page):
                             ft.Text(category, size=15, weight=ft.FontWeight.BOLD,
                                     color=get_expense_color(category)),
                         ]),
-                        ft.Text(f"Subtotal: ৳{int(block_subtotal)}", size=13,
+                        ft.Text(f"Subtotal: {currency_symbol}{int(block_subtotal)}", size=13,
                                 weight=ft.FontWeight.W_600, color="#FFFFFF"),
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                     ft.Divider(height=5, color="#1F2833"),
@@ -433,7 +435,7 @@ def build_expenses(page: ft.Page):
                          scroll=ft.ScrollMode.ADAPTIVE)
 
     # ── STYLED TREND BAR CHART ────────────────────────────────────────────────
-    def build_styled_trend_graph(filtered_items):
+    def build_styled_trend_graph(filtered_items, currency_symbol: str):
         day_totals     = {}
         day_categories = {}
         for _, exp in filtered_items:
@@ -470,7 +472,7 @@ def build_expenses(page: ft.Page):
                     width=32, height=total_bar_h,
                     bgcolor=bar_color_override,
                     border_radius=ft.BorderRadius(3, 3, 0, 0),
-                    tooltip=f"Daily Average: ৳{int(total_amt)}",
+                    tooltip=f"Daily Average: {currency_symbol}{int(total_amt)}",
                 ))
             else:
                 sorted_cats = sorted(cats_today.items(), key=lambda x: x[0].lower())
@@ -483,14 +485,14 @@ def build_expenses(page: ft.Page):
                             bgcolor=get_expense_color(cat_name),
                             border_radius=(ft.BorderRadius(3, 3, 0, 0)
                                           if cat_name == last_cat else 0),
-                            tooltip=f"{cat_name}: ৳{int(cat_amt)}",
+                            tooltip=f"{cat_name}: {currency_symbol}{int(cat_amt)}",
                         ))
 
             transparent_h = MAX_BAR_H - total_bar_h
             return ft.Column([
                 ft.Container(width=32, height=transparent_h, bgcolor="transparent"),
                 ft.Container(
-                    content=ft.Text(f"৳{int(total_amt)}", size=8, color="#FFFFFF",
+                    content=ft.Text(f"{currency_symbol}{int(total_amt)}", size=8, color="#FFFFFF",
                                     weight=ft.FontWeight.BOLD,
                                     text_align=ft.TextAlign.CENTER),
                     width=36, alignment=ft.alignment.Alignment(0, 0),
@@ -565,6 +567,9 @@ def build_expenses(page: ft.Page):
 
     # ── MAIN REFRESH ─────────────────────────────────────────────────────────
     def refresh_expense_view():
+        nonlocal currency_symbol
+        currency_symbol = dm.get_currency_symbol()
+
         data         = load_expense_data()
         all_expenses = data.get("expenses", [])
         cats         = data.get("categories", ["Study", "Food", "Transport", "Other"])
@@ -579,23 +584,25 @@ def build_expenses(page: ft.Page):
                                                                selected_anchor_date)
 
         total_spent       = sum(item[1].get("amount", 0.0) for item in filtered_items)
-        total_badge.value = f"Selected Total: ৳{int(total_spent)}"
+        total_badge.value = f"Selected Total: {currency_symbol}{int(total_spent)}"
 
-        legend_container.content      = build_legend_row(filtered_items, cats)
-        ledger_container.content      = build_itemized_ledger(filtered_items, cats)
-        trend_graph_container.content = build_styled_trend_graph(filtered_items)
+        budget_amount_input.label = f"Budget ({currency_symbol})"
+
+        legend_container.content      = build_legend_row(filtered_items, cats, currency_symbol)
+        ledger_container.content      = build_itemized_ledger(filtered_items, cats, currency_symbol)
+        trend_graph_container.content = build_styled_trend_graph(filtered_items, currency_symbol)
 
         # Budget progress — uses ALL-TIME totals so the bars reflect full spend
         all_time_totals = _get_all_time_spent_by_cat()
         budget_panel_container.content = build_budget_progress_panel(
-            cats, budgets, all_time_totals
+            cats, budgets, all_time_totals, currency_symbol
         )
 
         try:
             filter_status_banner.update(); total_badge.update()
             trend_graph_container.update(); chart_canvas.update()
             legend_container.update(); ledger_container.update()
-            budget_panel_container.update()
+            budget_panel_container.update(); budget_amount_input.update()
         except Exception:
             pass
 
@@ -630,7 +637,7 @@ def build_expenses(page: ft.Page):
         label="Category",
         label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=140)
     budget_amount_input = ft.TextField(
-        label="Budget (৳)",
+        label=f"Budget ({currency_symbol})",
         label_style=ft.TextStyle(color="#45A29E"), border_color="#243142",
         width=120, height=44, text_size=13, keyboard_type=ft.KeyboardType.NUMBER)
 
@@ -638,7 +645,7 @@ def build_expenses(page: ft.Page):
         "Log Transaction", icon=ft.Icons.MONETIZATION_ON_ROUNDED,
         style=ft.ButtonStyle(bgcolor="#1F2833", color="#66FCF1"),
         on_click=add_expense_clicked)
-    total_badge         = ft.Text("Selected Total: ৳0", size=18,
+    total_badge         = ft.Text(f"Selected Total: {currency_symbol}0", size=18,
                                    weight=ft.FontWeight.W_700, color="#66FCF1")
     settings_btn        = ft.IconButton(
         ft.Icons.SETTINGS_SUGGEST_ROUNDED, icon_color="#66FCF1",

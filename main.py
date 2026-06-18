@@ -12,14 +12,18 @@ from modules.tasks import build_tasks
 from modules.expenses import build_expenses
 from modules.dashboard import build_dashboard
 from modules.journal import build_journal
+from modules.settings import build_settings
+from modules.glass_theme import register_wallpaper_container, update_background_wallpaper, get_active_glass_theme
+
+import data_manager as dm
 
 
 def main(page: ft.Page):
     page.title = "FocusOS - Advanced Productivity Dashboard"
     page.theme_mode = ft.ThemeMode.DARK
-    page.window_width = 1280
-    page.window_height = 800
-    page.window_resizable = True
+    page.window.width     = 1280
+    page.window.height    = 800
+    page.window.resizable = True
 
     content_area = ft.Container(expand=True, padding=15)
 
@@ -35,6 +39,8 @@ def main(page: ft.Page):
             content_area.content = build_expenses(page)
         elif index == 4:
             content_area.content = build_journal(page)
+        elif index == 5:
+            content_area.content = build_settings(page)
         content_area.update()
 
     # ── Always-on-top pin button ──────────────────────────────────────────────
@@ -42,7 +48,7 @@ def main(page: ft.Page):
 
     def toggle_pin(e):
         _pinned["value"] = not _pinned["value"]
-        page.window_always_on_top = _pinned["value"]
+        page.window.always_on_top = _pinned["value"]
         pin_btn.icon       = (ft.Icons.PUSH_PIN_ROUNDED
                               if _pinned["value"]
                               else ft.Icons.PUSH_PIN_OUTLINED)
@@ -66,11 +72,27 @@ def main(page: ft.Page):
         padding=ft.Padding(0, 0, 0, 8),
     )
 
+
+    # ── Glass sidebar colour ──────────────────────────────────────────────────
+    # get_active_glass_theme() returns {"card_bg": "rgba(r,g,b,a)", "border": ...}.
+    # We reuse the card_bg RGB channels but bump opacity to ~0.65 so the
+    # sidebar reads as a distinct frosted panel rather than fully see-through.
+    # _parse_rgba / _set_alpha live in glass_theme — import them for reuse.
+    from modules.glass_theme import _parse_rgba, _set_alpha
+    _SIDEBAR_FALLBACK = "rgba(17,21,29,0.65)"
+    try:
+        _glass      = get_active_glass_theme()
+        _card_bg    = _glass.get("card_bg", _SIDEBAR_FALLBACK) if isinstance(_glass, dict) else _SIDEBAR_FALLBACK
+        # Clamp sidebar opacity to 0.65 so the wallpaper shows through subtly
+        _sidebar_bg = _set_alpha(_card_bg, 0.65)
+    except Exception:
+        _sidebar_bg = _SIDEBAR_FALLBACK
+
     sidebar_rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
         min_width=100,
-        bgcolor="#11151D",
+        bgcolor=_sidebar_bg,
         expand=True,
         destinations=[
             ft.NavigationRailDestination(icon=ft.Icons.DASHBOARD_ROUNDED,              label="Dashboard"),
@@ -78,6 +100,7 @@ def main(page: ft.Page):
             ft.NavigationRailDestination(icon=ft.Icons.ASSIGNMENT_ROUNDED,             label="Tasks"),
             ft.NavigationRailDestination(icon=ft.Icons.ACCOUNT_BALANCE_WALLET_ROUNDED, label="Expenses"),
             ft.NavigationRailDestination(icon=ft.Icons.MENU_BOOK_ROUNDED,              label="Journal"),
+            ft.NavigationRailDestination(icon=ft.Icons.SETTINGS_ROUNDED,               label="Settings"),
         ],
         on_change=nav_change,
     )
@@ -102,12 +125,26 @@ def main(page: ft.Page):
             ft.VerticalDivider(width=1, color="rgba(255,255,255,0.05)"),
             content_area,
         ], expand=True),
-        bgcolor="#0B0E14",
+        bgcolor=None,   # wallpaper DecorationImage is the visual background
         expand=True,
     )
 
+    # Wire up the wallpaper system: this frame is the background target
+    register_wallpaper_container(main_layout_frame)
+
     page.add(main_layout_frame)
+
+    # Restore a previously-chosen wallpaper, if one was saved
+    try:
+        settings = dm.get_settings()
+    except AttributeError:
+        settings = {}
+    bg_path = (settings.get("background_image_path")
+               if isinstance(settings, dict)
+               else getattr(settings, "background_image_path", None))
+    if bg_path:
+        update_background_wallpaper(bg_path)
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main)

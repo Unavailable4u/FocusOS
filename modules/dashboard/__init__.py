@@ -6,9 +6,20 @@ from .engine import parse_aggregated_metrics, get_date_range_display_string, get
 from .timelines import build_chrono_timeline_graph, build_expense_trend_graph, build_monthly_horizontal_focus_graph
 from .charts import create_stat_card, build_proportional_share_panel, build_upcoming_goal_pie_panel
 
+_DASHBOARD_FALLBACK_TITLE = "Comprehensive Performance Dashboard Engine"
+
+
+def _get_dashboard_title() -> str:
+    """Returns a personalized greeting using settings.profile_name when set,
+    otherwise falls back to the static dashboard title."""
+    name = dm.get_settings().get("profile_name", "").strip()
+    return f"Welcome back, {name}" if name else _DASHBOARD_FALLBACK_TITLE
+
+
 def build_dashboard(page: ft.Page):
     current_interval = "Daily"
     time_offset = 0  # 0 = today, -1 = yesterday, etc.
+    currency_symbol = dm.get_currency_symbol()
 
     dashboard_subtitle_lbl = ft.Text("", size=13, color="grey600")
     card_focus    = ft.Container(expand=True)
@@ -56,7 +67,7 @@ def build_dashboard(page: ft.Page):
             f"Active backlog remaining: {m['pending_tasks']}", "#00E676")
         card_expenses.content = create_stat_card(
             "CONSOLIDATED BURNS TALLY",
-            f"৳{m['total_expense']:,.2f}",
+            f"{currency_symbol}{m['total_expense']:,.2f}",
             "Tracked financial outbounds", "#FF9100")
 
         # ── Streak card — always reflects current running streak ─────────────
@@ -79,13 +90,13 @@ def build_dashboard(page: ft.Page):
             current_interval, m["chrono_distribution"], m["target_dates"])
         task_distribution_panel.content = build_proportional_share_panel(
             "Task Category Volume Distribution Share",
-            m["task_time_breakdown"], is_currency=False)
+            m["task_time_breakdown"], is_currency=False, currency_symbol=currency_symbol)
         expense_distribution_panel.content = build_proportional_share_panel(
             "Capital Resource Cost Proportional Allocation",
-            m["category_expense_breakdown"], is_currency=True)
+            m["category_expense_breakdown"], is_currency=True, currency_symbol=currency_symbol)
 
         expense_bar_graph.content = build_expense_trend_graph(
-            current_interval, display_dates, raw_db_data.get("expenses", []))
+            current_interval, display_dates, raw_db_data.get("expenses", []), currency_symbol=currency_symbol)
         monthly_horizontal_graph.content = build_monthly_horizontal_focus_graph(
             raw_db_data.get("hourly_task_distribution", {}))
 
@@ -184,7 +195,7 @@ def build_dashboard(page: ft.Page):
         h, m = divmod(int(s["total_focus_mins"]), 60)
         focus_str   = f"{h}h {m}m" if h else f"{m}m"
         top_str     = f"  ·  Top task: {s['top_task']}" if s["top_task"] else ""
-        expense_str = f"৳{s['total_expense']:,.0f}" if s["total_expense"] else "৳0"
+        expense_str = f"{currency_symbol}{s['total_expense']:,.0f}" if s["total_expense"] else f"{currency_symbol}0"
         return (
             f"📊  Weekly wrap  ({s['week_start']} → {s['week_end']})   "
             f"Focus: {focus_str}{top_str}   "
@@ -224,7 +235,7 @@ def build_dashboard(page: ft.Page):
     header_bar = ft.Container(
         content=ft.Row([
             ft.Column([
-                ft.Text("Comprehensive Performance Dashboard Engine", size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
+                ft.Text(_get_dashboard_title(), size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
                 dashboard_subtitle_lbl,
             ], spacing=2),
             ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),

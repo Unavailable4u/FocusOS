@@ -94,7 +94,7 @@ def _build_avg_focus_bar(avg_mins: float, max_hour_total: float) -> ft.Column:
     )
 
 
-def _build_avg_expense_bar(avg_amt: float, max_val: float) -> ft.Column:
+def _build_avg_expense_bar(avg_amt: float, max_val: float, currency_symbol: str = "৳") -> ft.Column:
     """
     Grey outlined AVG reference column for the expense trend graph.
     """
@@ -102,7 +102,7 @@ def _build_avg_expense_bar(avg_amt: float, max_val: float) -> ft.Column:
     avg_bar_height = max(6, int((avg_amt / max(max_val, 1)) * GRAPH_H))
     transparent_h = GRAPH_H - avg_bar_height
 
-    avg_label = f"৳{int(avg_amt)}"
+    avg_label = f"{currency_symbol}{int(avg_amt)}"
 
     avg_bar = ft.Container(
         width=22,
@@ -303,7 +303,7 @@ def build_chrono_timeline_graph(current_interval, distribution_dict, target_date
     )
 
 
-def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list):
+def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list, currency_symbol: str = "৳"):
     """
     current_interval — "Daily" | "Weekly" | "Monthly"
     The AVG reference bar is only injected for Weekly and Monthly views.
@@ -335,7 +335,7 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list)
 
     # ── AVG reference bar (Weekly / Monthly only) ────────────────────────────
     if current_interval in ("Weekly", "Monthly") and avg_amt > 0:
-        columns.append(_build_avg_expense_bar(avg_amt, max_val))
+        columns.append(_build_avg_expense_bar(avg_amt, max_val, currency_symbol))
 
     # ── Data columns ─────────────────────────────────────────────────────────
     for day_stamp in sorted(day_totals.keys()):
@@ -359,7 +359,7 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list)
                             height=segment_height,
                             bgcolor=segment_color,
                             border_radius=2,
-                            tooltip=f"{cat_name}: ৳{int(cat_amt)}",
+                            tooltip=f"{cat_name}: {currency_symbol}{int(cat_amt)}",
                         )
                     )
             transparent_space_height = max(0, 135 - actual_segments_height)
@@ -382,7 +382,7 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list)
         # Value label above bar
         if total_amt > 0:
             value_label = ft.Text(
-                f"৳{int(total_amt)}",
+                f"{currency_symbol}{int(total_amt)}",
                 size=7,
                 color="#B0BEC5",
                 weight=ft.FontWeight.BOLD,
