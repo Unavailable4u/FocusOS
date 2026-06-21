@@ -1,7 +1,6 @@
 import flet as ft
 import flet_charts as fch
 import os
-import csv
 from datetime import datetime, timedelta
 import data_manager as dm
 from .engine import load_expense_data, save_expense_data, get_filter_date_range, get_filter_banner_string, get_filtered_expenses
@@ -256,29 +255,32 @@ def build_expenses(page: ft.Page, initial_query: str = None):
         dm.set_category_budget(cat, amt)
         refresh_expense_view()
 
-    def _get_all_time_spent_by_cat() -> dict:
+    def _get_current_month_spent_by_cat() -> dict:
         """
-        Returns {category: total_amount} for ALL expenses ever recorded —
-        used to compare against a monthly budget without date filtering.
+        Returns {category: total_amount} for expenses recorded in the
+        current calendar month only — budgets are monthly, so the progress
+        bars must compare against this month's spend, not all-time totals.
         """
+        month_prefix = datetime.now().strftime("%Y-%m")
         data = load_expense_data()
         totals = {}
         for exp in data.get("expenses", []):
-            cat = exp.get("category", "Other")
-            totals[cat] = totals.get(cat, 0.0) + float(exp.get("amount", 0.0))
+            if str(exp.get("date", "")).startswith(month_prefix):
+                cat = exp.get("category", "Other")
+                totals[cat] = totals.get(cat, 0.0) + float(exp.get("amount", 0.0))
         return totals
 
-    def build_budget_progress_panel(cats: list, category_budgets: dict, all_time_totals: dict, currency_symbol: str):
+    def build_budget_progress_panel(cats: list, category_budgets: dict, month_totals: dict, currency_symbol: str):
         """
         For every category that has a budget set (in goals["category_budgets"]),
-        render a labelled progress bar showing spent vs budget.
+        render a labelled progress bar showing this month's spend vs budget.
         """
         rows = []
         for cat in cats:
             budget = category_budgets.get(cat, 0)
             if budget <= 0:
                 continue
-            spent  = all_time_totals.get(cat, 0.0)
+            spent  = month_totals.get(cat, 0.0)
             ratio  = min(spent / budget, 1.0) if budget > 0 else 0.0
             color  = _budget_bar_color(spent / budget if budget > 0 else 0)
             pct    = int((spent / budget) * 100) if budget > 0 else 0
@@ -632,11 +634,11 @@ def build_expenses(page: ft.Page, initial_query: str = None):
         ledger_container.content      = build_itemized_ledger(filtered_items, cats, currency_symbol)
         trend_graph_container.content = build_styled_trend_graph(filtered_items, currency_symbol)
 
-        # Budget progress — uses ALL-TIME totals so the bars reflect full spend,
+        # Budget progress — uses THIS MONTH's totals (budgets are monthly),
         # compared against goals["category_budgets"] (single source of truth).
-        all_time_totals = _get_all_time_spent_by_cat()
+        month_totals = _get_current_month_spent_by_cat()
         budget_panel_container.content = build_budget_progress_panel(
-            cats, category_budgets, all_time_totals, currency_symbol
+            cats, category_budgets, month_totals, currency_symbol
         )
 
         try:

@@ -1,8 +1,7 @@
 import flet as ft
 import sys
 import os
-import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:
     import data_manager as dm
@@ -357,10 +356,25 @@ def build_tasks(page: ft.Page, initial_query: str = None):
         ], width=240
     )
 
-    def handle_date_picked(e):
-        if due_date_picker.value:
-            due_date_display.value = due_date_picker.value.strftime("%Y-%m-%d")
-            page.update()
+    _pending_due = {"value": None}
+
+    def handle_due_date_change(e):
+        if e.control.value:
+            _pending_due["value"] = e.control.value
+
+    def handle_due_date_dismiss(e):
+        raw = _pending_due["value"]
+        if raw is None:
+            return
+        # Flet's DatePicker fires with a midnight-UTC datetime, which rolls
+        # back one calendar day once converted to a UTC+ local timezone.
+        # Adding a day compensates, matching the dashboard/expenses pickers.
+        picked = (raw.date() + timedelta(days=1)
+                  if hasattr(raw, "date") and callable(raw.date)
+                  else raw + timedelta(days=1))
+        due_date_display.value = picked.strftime("%Y-%m-%d")
+        page.update()
+        _pending_due["value"] = None
 
     def clear_due_date(e):
         due_date_display.value = ""
@@ -369,9 +383,11 @@ def build_tasks(page: ft.Page, initial_query: str = None):
     due_date_picker = ft.DatePicker(
         first_date=datetime(2020, 1, 1),
         last_date=datetime(2100, 12, 31),
-        on_change=handle_date_picked,
+        on_change=handle_due_date_change,
+        on_dismiss=handle_due_date_dismiss,
     )
-    page.overlay.append(due_date_picker)
+    if due_date_picker not in page.overlay:
+        page.overlay.append(due_date_picker)
 
     due_date_display = ft.TextField(
         label="Due Date (optional)", label_style=ft.TextStyle(color="#45A29E"),

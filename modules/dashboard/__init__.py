@@ -22,6 +22,7 @@ def build_dashboard(page: ft.Page):
     time_offset = 0  # 0 = today, -1 = yesterday, etc.
     currency_symbol = dm.get_currency_symbol()
 
+    dashboard_title_lbl    = ft.Text(_get_dashboard_title(), size=22, weight=ft.FontWeight.W_600, color="#45A29E")
     dashboard_subtitle_lbl = ft.Text("", size=13, color="grey600")
     streak_badge_icon = ft.Icon(ft.Icons.LOCAL_FIRE_DEPARTMENT_ROUNDED, size=14, color="#FFEA00")
     streak_badge_text = ft.Text("", size=12, weight=ft.FontWeight.W_600, color="#FFEA00")
@@ -48,6 +49,13 @@ def build_dashboard(page: ft.Page):
         nonlocal time_offset
         m           = parse_aggregated_metrics(current_interval, time_offset)
         raw_db_data = dm.load_data()
+
+        # Greeting can change if the user updates their display name in
+        # Settings, so refresh it on every repaint rather than only at
+        # build time.
+        dashboard_title_lbl.value = _get_dashboard_title()
+        try: dashboard_title_lbl.update()
+        except Exception: pass
 
         btn_next.disabled   = (time_offset >= 0)
         btn_next.icon_color = "grey700" if (time_offset >= 0) else "#00FFFF"
@@ -113,6 +121,11 @@ def build_dashboard(page: ft.Page):
         expense_distribution_panel.content = build_proportional_share_panel(
             "Capital Resource Cost Proportional Allocation",
             m["category_expense_breakdown"], is_currency=True, currency_symbol=currency_symbol)
+
+        # Rebuild (not just refresh) the goal pie panel so it reflects today's
+        # latest focus minutes / goal every repaint, instead of staying frozen
+        # at whatever the data looked like when the dashboard first loaded.
+        goal_pie_panel.content = build_upcoming_goal_pie_panel().content
 
         expense_bar_graph.content = build_expense_trend_graph(
             current_interval, display_dates, raw_db_data.get("expenses", []), currency_symbol=currency_symbol)
@@ -194,8 +207,9 @@ def build_dashboard(page: ft.Page):
         return (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
 
     def _should_show_banner() -> bool:
-        raw_data      = dm.load_data()
-        last_dismissed = raw_data.get("last_summary_dismissed", "")
+        # Stored under settings (not the data root) so it isn't dropped by
+        # initialize_db()'s back-fill logic or a data restore.
+        last_dismissed = dm.get_settings().get("last_summary_dismissed", "")
         return last_dismissed != _this_monday()
 
     weekly_banner = ft.Banner(
@@ -209,7 +223,6 @@ def build_dashboard(page: ft.Page):
                 on_click=lambda e: _dismiss_banner(e),
             )
         ],
-        visible=False,
     )
 
     def _build_banner_text(s: dict) -> str:
@@ -225,19 +238,13 @@ def build_dashboard(page: ft.Page):
         )
 
     def _dismiss_banner(e):
-        raw_data = dm.load_data()
-        raw_data["last_summary_dismissed"] = _this_monday()
-        dm.save_data(raw_data)
-        weekly_banner.visible = False
-        try:
-            weekly_banner.update()
-        except Exception:
-            pass
+        dm.save_settings({"last_summary_dismissed": _this_monday()})
+        page.close(weekly_banner)
 
-    if _should_show_banner():
+    show_banner_now = _should_show_banner()
+    if show_banner_now:
         s = get_weekly_summary()
         weekly_banner.content = ft.Text(_build_banner_text(s), color="white", size=13)
-        weekly_banner.visible = True
 
     interval_toggle = ft.CupertinoSegmentedButton(
         controls=[
@@ -256,7 +263,7 @@ def build_dashboard(page: ft.Page):
     header_bar = ft.Container(
         content=ft.Row([
             ft.Column([
-                ft.Text(_get_dashboard_title(), size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
+                dashboard_title_lbl,
                 ft.Row([dashboard_subtitle_lbl, streak_badge], spacing=10),
             ], spacing=2),
             ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),
@@ -282,8 +289,12 @@ def build_dashboard(page: ft.Page):
         ft.Container(height=5),
     ], expand=True, scroll=ft.ScrollMode.ALWAYS)
 
+    # weekly_banner is shown via page.open()/page.close() (see below) rather
+    # than as a layout child — ft.Banner is designed to be surfaced that way,
+    # and embedding it directly in this Column can cause styling quirks
+    # depending on the Flet version.
     dashboard_layout_view = ft.Column(
-        [weekly_banner, header_bar, dashboard_scroll_body],
+        [header_bar, dashboard_scroll_body],
         expand=True,
         spacing=0,
     )
@@ -305,5 +316,8 @@ def build_dashboard(page: ft.Page):
     threading.Thread(target=schedule_native_callback, daemon=True).start()
 
     repaint_dashboard_ui()
+
+    if show_banner_now:
+        page.open(weekly_banner)
 
     return dashboard_layout_view

@@ -288,7 +288,7 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
     """
     Renders a wallpaper card with two ways to set a background:
 
-    1. Bundled presets — 4 clickable thumbnails (forest, mountaints, night_city,
+    1. Bundled presets — 4 clickable thumbnails (forest, mountains, night_city,
        ocean) sourced from assets/wallpapers/.  The active preset gets a white
        border ring.  If a file is missing at runtime the tile shows a labelled
        colour swatch instead so the UI never breaks.
@@ -313,7 +313,7 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
     # (label, filename, fallback_color)
     PRESETS: list[tuple[str, str, str]] = [
         ("Forest",     "forest.jpg",      "#1B3A2D"),
-        ("Mountains",  "mountaints.jpg",  "#2C3E50"),
+        ("Mountains",  "mountains.jpg",  "#2C3E50"),
         ("Night City", "night_city.jpg",  "#0D0D2B"),
         ("Ocean",      "ocean.jpg",       "#0A3560"),
     ]
@@ -735,6 +735,46 @@ def build_settings(page: ft.Page):
         padding=20,
     )
 
+    # ── Goals: daily focus goal (drives streak calendar, goal pie, streak counter) ──
+
+    goals = dm.get_goals()
+
+    def save_daily_goal(e):
+        raw = (goal_field.value or "").strip()
+        try:
+            minutes = int(raw) if raw else 120
+        except ValueError:
+            return
+        dm.save_goals({"daily_focus_minutes": minutes})
+
+    goal_field = ft.TextField(
+        label="Daily focus goal (minutes)",
+        value=str(goals.get("daily_focus_minutes", 120)),
+        width=200,
+        keyboard_type=ft.KeyboardType.NUMBER,
+        on_change=save_daily_goal,
+        on_blur=save_daily_goal,
+    )
+
+    goals_section = ft.Container(
+        content=ft.Column(
+            [
+                ft.Text("Goals", size=16, weight=ft.FontWeight.W_600),
+                ft.Text(
+                    "Drives the dashboard streak calendar, the goal pie chart, "
+                    "and the daily streak counter.",
+                    size=13,
+                    color="grey600",
+                ),
+                goal_field,
+            ],
+            spacing=8,
+        ),
+        bgcolor="#11151D",
+        border_radius=12,
+        padding=20,
+    )
+
     default_durations = settings.get("default_durations", {})
 
     def save_default_durations(e):
@@ -852,6 +892,7 @@ def build_settings(page: ft.Page):
             header,
             ft.Divider(height=1, color="rgba(255,255,255,0.05)"),
             profile_section,
+            goals_section,
             pomodoro_defaults_section,
             glass_theme_section,
             wallpaper_section,

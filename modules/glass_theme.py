@@ -52,10 +52,16 @@ def update_background_wallpaper(image_path: str) -> None:
     """Safely updates the background image without breaking control layouts."""
     global _wallpaper_container_ref
     if _wallpaper_container_ref:
-        _wallpaper_container_ref.image = ft.DecorationImage(
-            src=image_path, fit=ft.BoxFit.COVER
-        )
-        _wallpaper_container_ref.bgcolor = None
+        if image_path:
+            _wallpaper_container_ref.image = ft.DecorationImage(
+                src=image_path, fit=ft.BoxFit.COVER
+            )
+            _wallpaper_container_ref.bgcolor = None
+        else:
+            # Reset path: no image selected — restore the original dark
+            # background instead of leaving the layout fully transparent.
+            _wallpaper_container_ref.image = None
+            _wallpaper_container_ref.bgcolor = "#0B0E14"
         _wallpaper_container_ref.update()
 
 

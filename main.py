@@ -20,6 +20,10 @@ import data_manager as dm
 
 
 def main(page: ft.Page):
+    # Bootstrap data.json (creates it with the default goals shape and runs
+    # the legacy-budget migration) before anything else touches the data layer.
+    dm.initialize_db()
+
     page.title = "FocusOS - Advanced Productivity Dashboard"
     page.theme_mode = ft.ThemeMode.DARK
     page.window.width     = 1280
@@ -165,7 +169,7 @@ def main(page: ft.Page):
     # Sidebar column: search up top, nav rail expands to fill, pin button pinned at the bottom
     sidebar_column = ft.Container(
         content=ft.Column(
-            [sidebar_search, sidebar_rail, sidebar_footer],
+            [sidebar_search, sidebar_rail, ft.Container(expand=True), sidebar_footer],
             spacing=0,
             expand=True,
         ),
