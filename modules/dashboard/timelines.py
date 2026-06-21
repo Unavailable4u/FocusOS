@@ -459,6 +459,127 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list,
     )
 
 
+def build_weekday_focus_graph(weekday_totals: dict) -> ft.Container:
+    """
+    Simple 7-bar chart: total focus minutes per weekday (Mon..Sun), summed
+    across ALL logged history regardless of which calendar week or month a
+    given day fell in. Answers "which day of the week do I focus most on?"
+    — distinct from the streak heatmap (per-calendar-day) and the existing
+    trend graphs (per-specific-date), since this collapses every date down
+    to one of 7 weekday buckets.
+
+    Reuses the same bar-column visual language as build_chrono_timeline_graph
+    (transparent spacer above a value-proportional bar, value label, axis
+    label below) but with one flat-colored bar per weekday instead of a
+    per-task stacked column — there's no per-task breakdown to show here,
+    just a single total per weekday.
+
+    weekday_totals — dict as returned by engine.get_focus_by_weekday():
+    {"Monday": mins, "Tuesday": mins, ..., "Sunday": mins}, all 7 keys
+    always present.
+    """
+    BAR_COLOR = "#7C4DFF"   # fresh accent, distinct from every other graph's color
+    GRAPH_H = 135
+
+    weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    weekday_short = {
+        "Monday": "Mon", "Tuesday": "Tue", "Wednesday": "Wed", "Thursday": "Thu",
+        "Friday": "Fri", "Saturday": "Sat", "Sunday": "Sun",
+    }
+
+    max_total = max(weekday_totals.values()) if weekday_totals else 0
+    max_total = max(max_total, 1)  # avoid div-by-zero when nothing's logged yet
+
+    columns = []
+    for day_name in weekday_order:
+        total_mins = weekday_totals.get(day_name, 0)
+
+        if total_mins > 0:
+            bar_height = max(6, int((total_mins / max_total) * GRAPH_H))
+            transparent_h = max(0, (GRAPH_H - bar_height) - 10)  # room for the value label
+            value_label = ft.Text(
+                _fmt_mins(total_mins),
+                size=7,
+                color="#B0BEC5",
+                weight=ft.FontWeight.BOLD,
+                text_align=ft.TextAlign.CENTER,
+            )
+            bar = ft.Container(
+                width=28,
+                height=bar_height,
+                bgcolor=BAR_COLOR,
+                border_radius=3,
+                tooltip=f"{day_name}: {_fmt_mins(total_mins)} total (all-time)",
+            )
+        else:
+            transparent_h = 131
+            value_label = None
+            bar = ft.Container(
+                width=28,
+                height=4,
+                bgcolor="rgba(255,255,255,0.04)",
+                border_radius=3,
+            )
+
+        column_controls = [
+            ft.Container(width=28, height=transparent_h, bgcolor="transparent"),
+        ]
+        if value_label:
+            column_controls.append(value_label)
+        column_controls.append(bar)
+        column_controls.append(
+            ft.Text(weekday_short[day_name], size=9, color="#8E9AA6", weight=ft.FontWeight.BOLD)
+        )
+
+        columns.append(
+            ft.Column(
+                column_controls,
+                spacing=4,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+        )
+
+    top_day = max(weekday_totals, key=weekday_totals.get) if any(weekday_totals.values()) else None
+    subtitle = f"Peak day: {top_day}" if top_day else "No data logged yet"
+
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text(
+                            "Focus By Day Of Week",
+                            size=13,
+                            weight=ft.FontWeight.W_600,
+                            color="#FFFFFF",
+                        ),
+                        ft.Text(subtitle, size=10, color=BAR_COLOR),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Divider(height=12, color="rgba(255,255,255,0.05)"),
+                ft.Container(
+                    content=ft.Row(
+                        controls=columns,
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        scroll=ft.ScrollMode.ADAPTIVE,
+                    ),
+                    padding=ft.Padding(5, 8, 5, 2),
+                ),
+            ]
+        ),
+        bgcolor="#151A22",
+        padding=16,
+        border_radius=10,
+        border=ft.Border(
+            ft.BorderSide(1, "rgba(255,255,255,0.05)"),
+            ft.BorderSide(1, "rgba(255,255,255,0.05)"),
+            ft.BorderSide(1, "rgba(255,255,255,0.05)"),
+            ft.BorderSide(1, "rgba(255,255,255,0.05)"),
+        ),
+    )
+
+
 def build_monthly_horizontal_focus_graph(raw_hourly_distribution_data):
     base_today = datetime.now()
     monthly_dates = [

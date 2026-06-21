@@ -2,9 +2,10 @@ import flet as ft
 from datetime import datetime, timedelta
 import data_manager as dm
 import asyncio
-from .engine import parse_aggregated_metrics, get_date_range_display_string, get_focus_streak, get_weekly_summary
+from .engine import parse_aggregated_metrics, get_date_range_display_string, get_focus_streak, calculate_focus_streak, get_weekly_summary
 from .timelines import build_chrono_timeline_graph, build_expense_trend_graph, build_monthly_horizontal_focus_graph
 from .charts import create_stat_card, build_proportional_share_panel, build_upcoming_goal_pie_panel
+from .streaks import build_streak_heatmap_panel
 
 _DASHBOARD_FALLBACK_TITLE = "Comprehensive Performance Dashboard Engine"
 
@@ -22,6 +23,13 @@ def build_dashboard(page: ft.Page):
     currency_symbol = dm.get_currency_symbol()
 
     dashboard_subtitle_lbl = ft.Text("", size=13, color="grey600")
+    streak_badge_icon = ft.Icon(ft.Icons.LOCAL_FIRE_DEPARTMENT_ROUNDED, size=14, color="#FFEA00")
+    streak_badge_text = ft.Text("", size=12, weight=ft.FontWeight.W_600, color="#FFEA00")
+    streak_badge = ft.Row(
+        [streak_badge_icon, streak_badge_text],
+        spacing=3,
+        visible=False,
+    )
     card_focus    = ft.Container(expand=True)
     card_tasks    = ft.Container(expand=True)
     card_expenses = ft.Container(expand=True)
@@ -30,6 +38,7 @@ def build_dashboard(page: ft.Page):
     chrono_bar_graph         = ft.Container(expand=True)
     expense_bar_graph        = ft.Container(expand=True)
     monthly_horizontal_graph = ft.Container(expand=True)
+    streak_heatmap_panel     = ft.Container(expand=True)   # P5-T3 streak/goal-completion calendar
 
     task_distribution_panel    = ft.Container(expand=True)
     expense_distribution_panel = ft.Container(expand=True)
@@ -86,6 +95,16 @@ def build_dashboard(page: ft.Page):
             streak_value,
             streak_subtitle, "#FFEA00")
 
+        # ── Header badge — goal-driven streak (P5-T2's calculate_focus_streak) ─
+        goal_streak = calculate_focus_streak()
+        if goal_streak > 0:
+            streak_badge_text.value = f"{goal_streak}-day streak"
+            streak_badge.visible    = True
+        else:
+            streak_badge.visible    = False
+        try: streak_badge.update()
+        except Exception: pass
+
         chrono_bar_graph.content = build_chrono_timeline_graph(
             current_interval, m["chrono_distribution"], m["target_dates"])
         task_distribution_panel.content = build_proportional_share_panel(
@@ -99,12 +118,14 @@ def build_dashboard(page: ft.Page):
             current_interval, display_dates, raw_db_data.get("expenses", []), currency_symbol=currency_symbol)
         monthly_horizontal_graph.content = build_monthly_horizontal_focus_graph(
             raw_db_data.get("hourly_task_distribution", {}))
+        streak_heatmap_panel.content = build_streak_heatmap_panel()
 
         try:
             card_focus.update(); card_tasks.update()
             card_expenses.update(); card_streak.update()
             chrono_bar_graph.update(); expense_bar_graph.update()
             monthly_horizontal_graph.update()
+            streak_heatmap_panel.update()
             task_distribution_panel.update(); expense_distribution_panel.update()
             goal_pie_panel.update()
         except Exception: pass
@@ -236,7 +257,7 @@ def build_dashboard(page: ft.Page):
         content=ft.Row([
             ft.Column([
                 ft.Text(_get_dashboard_title(), size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
-                dashboard_subtitle_lbl,
+                ft.Row([dashboard_subtitle_lbl, streak_badge], spacing=10),
             ], spacing=2),
             ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -248,6 +269,8 @@ def build_dashboard(page: ft.Page):
         ft.Container(height=10),
         # All 4 stat cards in one row
         ft.Row([card_focus, card_tasks, card_expenses, card_streak], spacing=12),
+        ft.Container(height=5),
+        streak_heatmap_panel,
         ft.Container(height=5),
         monthly_horizontal_graph,
         ft.Container(height=5),

@@ -10,6 +10,7 @@ if ROOT_DIR not in sys.path:
 from modules.pomodoro.pomodoro import build_pomodoro
 from modules.tasks import build_tasks
 from modules.expenses import build_expenses
+from modules.expenses.engine import load_expense_data
 from modules.dashboard import build_dashboard
 from modules.journal import build_journal
 from modules.settings import build_settings
@@ -72,6 +73,62 @@ def main(page: ft.Page):
         padding=ft.Padding(0, 0, 0, 8),
     )
 
+    # ── Global search ──────────────────────────────────────────────────────────
+    # Searches task titles first, then expense titles, and jumps to whichever
+    # page has a match, pre-filling that page's own local search field.
+    global_search_feedback = ft.Text("", size=10, color="#FF4B4B", visible=False)
+
+    def global_search_submit(e):
+        query = (global_search_field.value or "").strip()
+        global_search_feedback.visible = False
+        if not query:
+            return
+        needle = query.lower()
+
+        try:
+            tasks_data = dm.load_data()
+            task_titles = [t.get("title", "") for t in tasks_data.get("tasks", [])]
+        except Exception:
+            task_titles = []
+
+        if any(needle in title.lower() for title in task_titles):
+            sidebar_rail.selected_index = 2
+            content_area.content = build_tasks(page, initial_query=query)
+            content_area.update()
+            page.update()
+            return
+
+        try:
+            expense_data = load_expense_data()
+            expense_titles = [exp.get("title", "") for exp in expense_data.get("expenses", [])]
+        except Exception:
+            expense_titles = []
+
+        if any(needle in title.lower() for title in expense_titles):
+            sidebar_rail.selected_index = 3
+            content_area.content = build_expenses(page, initial_query=query)
+            content_area.update()
+            page.update()
+            return
+
+        global_search_feedback.value = "No matches found."
+        global_search_feedback.visible = True
+        page.update()
+
+    global_search_field = ft.TextField(
+        label="Search everything...",
+        label_style=ft.TextStyle(color="#45A29E", size=10),
+        border_color="#243142",
+        prefix_icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
+        text_size=11,
+        content_padding=ft.Padding(8, 4, 8, 4),
+        on_submit=global_search_submit,
+    )
+
+    sidebar_search = ft.Container(
+        content=ft.Column([global_search_field, global_search_feedback], spacing=2),
+        padding=ft.Padding(8, 10, 8, 6),
+    )
 
     # ── Glass sidebar colour ──────────────────────────────────────────────────
     # get_active_glass_theme() returns {"card_bg": "rgba(r,g,b,a)", "border": ...}.
@@ -105,10 +162,10 @@ def main(page: ft.Page):
         on_change=nav_change,
     )
 
-    # Sidebar column: nav rail expands to fill, pin button pinned at the bottom
+    # Sidebar column: search up top, nav rail expands to fill, pin button pinned at the bottom
     sidebar_column = ft.Container(
         content=ft.Column(
-            [sidebar_rail, sidebar_footer],
+            [sidebar_search, sidebar_rail, sidebar_footer],
             spacing=0,
             expand=True,
         ),

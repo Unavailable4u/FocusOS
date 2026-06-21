@@ -1,118 +1,11 @@
 import json
 import os
+import csv
 from datetime import datetime
+
 
 DATA_FILE = "data.json"
 
-def initialize_db():
-    import os, json
-    if not os.path.exists(DATA_FILE):
-        default_data = {
-            "tasks": [],
-            "focus_logs": [],
-            "expenses": [],
-            "categories": ["Study", "Food", "Transport", "Other"],
-            "budgets": {},         # e.g. {"Food": 3000, "Transport": 1000}
-            "settings": {},        # profile name, currency, accent colour, theme, etc.
-            "goals": {},           # daily focus-min goal, monthly expense budget, etc.
-            "journal": [],         # [{"date": "YYYY-MM-DD", "mood": 3, "text": "..."}]
-            "pomodoro_notes": []   # [{"date": "...", "task": "...", "note": "..."}]
-        }
-        with open(DATA_FILE, "w") as f:
-            json.dump(default_data, f, indent=4)
-    else:
-        data = load_data()
-        changed = False
-        if "categories" not in data:
-            data["categories"] = ["Study", "Food", "Transport", "Other"]
-            changed = True
-        if "budgets" not in data:
-            data["budgets"] = {}
-            changed = True
-        if "settings" not in data:
-            data["settings"] = {}
-            changed = True
-        if "goals" not in data:
-            data["goals"] = {}
-            changed = True
-        if "journal" not in data:
-            data["journal"] = []
-            changed = True
-        if "pomodoro_notes" not in data:
-            data["pomodoro_notes"] = []
-            changed = True
-        if changed:
-            save_data(data)
-
-# --- BUG 5 FIX: update_expense now preserves the original date ---
-def update_expense(expense_index, new_title, new_amount, new_category, new_date=None):
-    data = load_data()
-    if 0 <= expense_index < len(data.get("expenses", [])):
-        original_date = data["expenses"][expense_index].get(
-            "date", datetime.now().strftime("%Y-%m-%d")
-        )
-        data["expenses"][expense_index] = {
-            "title": new_title,
-            "amount": float(new_amount),
-            "category": new_category,
-            "date": new_date if new_date else original_date
-        }
-        save_data(data)
-
-def delete_expense(expense_index):
-    data = load_data()
-    if 0 <= expense_index < len(data.get("expenses", [])):
-        data["expenses"].pop(expense_index)
-        save_data(data)
-
-# --- DYNAMIC CATEGORY MANAGEMENT ---
-def add_custom_category(category_name):
-    data = load_data()
-    if "categories" not in data:
-        data["categories"] = ["Study", "Food", "Transport", "Other"]
-
-    clean_cat = category_name.strip()
-    if clean_cat and clean_cat not in data["categories"]:
-        data["categories"].append(clean_cat)
-        save_data(data)
-        return True
-    return False
-
-def delete_custom_category(category_name):
-    data = load_data()
-    if category_name in data.get("categories", []):
-        data["categories"].remove(category_name)
-
-        for exp in data.get("expenses", []):
-            if exp.get("category") == category_name:
-                exp["category"] = "Other"
-
-        if "Other" not in data["categories"]:
-            data["categories"].append("Other")
-
-        # Remove budget for deleted category too
-        data.get("budgets", {}).pop(category_name, None)
-
-        # Remove any color override for deleted category
-        data.get("settings", {}).get("category_color_overrides", {}).pop(category_name, None)
-
-        save_data(data)
-
-# --- BUDGET MANAGEMENT ---
-def set_budget(category_name: str, amount: float):
-    """Set or update the monthly budget for a category. Pass 0 to remove."""
-    data = load_data()
-    if "budgets" not in data:
-        data["budgets"] = {}
-    if amount > 0:
-        data["budgets"][category_name] = float(amount)
-    else:
-        data["budgets"].pop(category_name, None)
-    save_data(data)
-
-def get_budgets() -> dict:
-    """Returns the full budgets dict {category: amount}."""
-    return load_data().get("budgets", {})
 
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -140,17 +33,17 @@ def load_data():
 
             data = json.loads(content)
 
-            if "tasks"                   not in data: data["tasks"]                   = []
-            if "expenses"                not in data: data["expenses"]                = []
-            if "categories"              not in data: data["categories"]              = ["Study", "Food", "Transport", "Other"]
-            if "focus_logs"              not in data: data["focus_logs"]              = []
-            if "hourly_focus"            not in data: data["hourly_focus"]            = {}
+            if "tasks"                    not in data: data["tasks"]                    = []
+            if "expenses"                 not in data: data["expenses"]                 = []
+            if "categories"               not in data: data["categories"]               = ["Study", "Food", "Transport", "Other"]
+            if "focus_logs"               not in data: data["focus_logs"]               = []
+            if "hourly_focus"             not in data: data["hourly_focus"]             = {}
             if "hourly_task_distribution" not in data: data["hourly_task_distribution"] = {}
-            if "budgets"                 not in data: data["budgets"]                 = {}
-            if "settings"                not in data: data["settings"]                = {}
-            if "goals"                   not in data: data["goals"]                   = {}
-            if "journal"                 not in data: data["journal"]                 = []
-            if "pomodoro_notes"          not in data: data["pomodoro_notes"]          = []
+            if "budgets"                  not in data: data["budgets"]                  = {}
+            if "settings"                 not in data: data["settings"]                 = {}
+            if "goals"                    not in data: data["goals"]                    = {}
+            if "journal"                  not in data: data["journal"]                  = []
+            if "pomodoro_notes"           not in data: data["pomodoro_notes"]           = []
 
             return data
 
@@ -164,9 +57,125 @@ def load_data():
             "journal": [], "pomodoro_notes": []
         }
 
+
 def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
+
+
+# ── Data Export helpers ───────────────────────────────────────────────────────
+
+def export_tasks_csv(filepath: str) -> bool:
+    """
+    Writes all tasks to a CSV file at *filepath*.
+
+    Columns: id, title, quadrant, completed, due_date
+
+    Returns True on success, False on any I/O or serialisation error.
+    """
+    fieldnames = ["id", "title", "quadrant", "completed", "due_date"]
+    try:
+        tasks = load_data().get("tasks", [])
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(tasks)
+        return True
+    except (OSError, csv.Error):
+        return False
+
+
+def export_expenses_csv(filepath: str) -> bool:
+    """
+    Writes all expenses to a CSV file at *filepath*.
+
+    Columns: title, amount, category, date
+
+    Returns True on success, False on any I/O or serialisation error.
+    """
+    fieldnames = ["title", "amount", "category", "date"]
+    try:
+        expenses = load_data().get("expenses", [])
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(expenses)
+        return True
+    except (OSError, csv.Error):
+        return False
+
+
+# ── Database initialisation ───────────────────────────────────────────────────
+
+def initialize_db():
+    if not os.path.exists(DATA_FILE):
+        default_data = {
+            "tasks": [],
+            "focus_logs": [],
+            "expenses": [],
+            "categories": ["Study", "Food", "Transport", "Other"],
+            "budgets": {},         # legacy/deprecated — see set_category_budget()
+            "settings": {},        # profile name, currency, accent colour, theme, etc.
+            "goals": {
+                "daily_focus_minutes": 120,
+                "monthly_expense_budget": 0,
+                "category_budgets": {}
+            },
+            "journal": [],         # [{"date": "YYYY-MM-DD", "mood": 3, "text": "..."}]
+            "pomodoro_notes": []   # [{"date": "...", "task": "...", "note": "..."}]
+        }
+        with open(DATA_FILE, "w") as f:
+            json.dump(default_data, f, indent=4)
+    else:
+        data = load_data()
+        changed = False
+        if "categories"    not in data: data["categories"]    = ["Study", "Food", "Transport", "Other"]; changed = True
+        if "budgets"       not in data: data["budgets"]       = {};  changed = True
+        if "settings"      not in data: data["settings"]      = {};  changed = True
+        if "goals"         not in data: data["goals"]         = {};  changed = True
+        if "journal"       not in data: data["journal"]       = [];  changed = True
+        if "pomodoro_notes" not in data: data["pomodoro_notes"] = []; changed = True
+        if changed:
+            save_data(data)
+
+    # One-time migration: fold any legacy data["budgets"] entries into
+    # goals["category_budgets"], which is now the single source of truth.
+    _migrate_legacy_budgets()
+
+
+def _migrate_legacy_budgets() -> None:
+    """
+    Moves any entries still sitting in the old data["budgets"] dict into
+    goals["category_budgets"]. Existing goals-side entries win on conflict
+    (so a value the user already set under the new system is never
+    clobbered by a stale legacy one). After merging, data["budgets"] is
+    cleared so the legacy path stops being read or written anywhere.
+
+    Safe to call repeatedly — it's a no-op once data["budgets"] is empty.
+    """
+    data = load_data()
+    legacy_budgets = data.get("budgets", {})
+    if not legacy_budgets:
+        return
+
+    goals = dict(data.get("goals", {}))
+    category_budgets = dict(goals.get("category_budgets", {}))
+
+    changed = False
+    for cat, amount in legacy_budgets.items():
+        if cat not in category_budgets and amount:
+            category_budgets[cat] = amount
+            changed = True
+
+    if changed:
+        goals["category_budgets"] = category_budgets
+        data["goals"] = goals
+
+    data["budgets"] = {}
+    save_data(data)
+
+
+# ── Task helpers ──────────────────────────────────────────────────────────────
 
 def add_task(title, quadrant, due_date=None):
     data = load_data()
@@ -182,6 +191,7 @@ def add_task(title, quadrant, due_date=None):
     save_data(data)
     return new_task
 
+
 def toggle_task_completion(task_id):
     data = load_data()
     for task in data["tasks"]:
@@ -190,7 +200,10 @@ def toggle_task_completion(task_id):
             break
     save_data(data)
 
-# --- BUG 2 FIX: add_expense now saves the "date" field ---
+
+# ── Expense helpers ───────────────────────────────────────────────────────────
+
+# BUG 2 FIX: add_expense now saves the "date" field
 def add_expense(title, amount, category):
     data = load_data()
     if "expenses" not in data:
@@ -206,10 +219,95 @@ def add_expense(title, amount, category):
     save_data(data)
     return new_expense
 
-# --- BUG 6 FIX: log_focus now also writes to hourly_task_distribution ---
+
+# BUG 5 FIX: update_expense now preserves the original date
+def update_expense(expense_index, new_title, new_amount, new_category, new_date=None):
+    data = load_data()
+    if 0 <= expense_index < len(data.get("expenses", [])):
+        original_date = data["expenses"][expense_index].get(
+            "date", datetime.now().strftime("%Y-%m-%d")
+        )
+        data["expenses"][expense_index] = {
+            "title": new_title,
+            "amount": float(new_amount),
+            "category": new_category,
+            "date": new_date if new_date else original_date
+        }
+        save_data(data)
+
+
+def delete_expense(expense_index):
+    data = load_data()
+    if 0 <= expense_index < len(data.get("expenses", [])):
+        data["expenses"].pop(expense_index)
+        save_data(data)
+
+
+# ── Category management ───────────────────────────────────────────────────────
+
+def add_custom_category(category_name):
+    data = load_data()
+    if "categories" not in data:
+        data["categories"] = ["Study", "Food", "Transport", "Other"]
+
+    clean_cat = category_name.strip()
+    if clean_cat and clean_cat not in data["categories"]:
+        data["categories"].append(clean_cat)
+        save_data(data)
+        return True
+    return False
+
+
+def delete_custom_category(category_name):
+    data = load_data()
+    if category_name in data.get("categories", []):
+        data["categories"].remove(category_name)
+
+        for exp in data.get("expenses", []):
+            if exp.get("category") == category_name:
+                exp["category"] = "Other"
+
+        if "Other" not in data["categories"]:
+            data["categories"].append("Other")
+
+        # Remove budget for deleted category too (goals/category_budgets —
+        # the single source of truth; see set_category_budget()).
+        goals = dict(data.get("goals", {}))
+        category_budgets = dict(goals.get("category_budgets", {}))
+        if category_budgets.pop(category_name, None) is not None:
+            goals["category_budgets"] = category_budgets
+            data["goals"] = goals
+
+        # Remove any color override for deleted category
+        data.get("settings", {}).get("category_color_overrides", {}).pop(category_name, None)
+
+        save_data(data)
+
+
+# ── Budget management (DEPRECATED — kept only for backward compatibility) ─────
+#
+# data["budgets"] is no longer the source of truth. All reads/writes for
+# per-category budgets now go through set_category_budget()/get_category_budget()
+# below, which live in goals["category_budgets"]. These two functions are
+# kept only in case any external/legacy caller still references them, and
+# they now delegate to the goals-based helpers so behaviour stays unified.
+
+def set_budget(category_name: str, amount: float):
+    """Deprecated — use set_category_budget(). Kept as a thin alias."""
+    set_category_budget(category_name, amount)
+
+
+def get_budgets() -> dict:
+    """Deprecated — use get_goals()['category_budgets']. Kept as a thin alias."""
+    return get_goals().get("category_budgets", {})
+
+
+# ── Focus logging ─────────────────────────────────────────────────────────────
+
+# BUG 6 FIX: log_focus now also writes to hourly_task_distribution
 def log_focus(task_title, duration_minutes):
     data = load_data()
-    now  = datetime.now()
+    now   = datetime.now()
     today = now.strftime("%Y-%m-%d")
     hour  = now.hour
 
@@ -232,6 +330,7 @@ def log_focus(task_title, duration_minutes):
     task_map[task_title] = task_map.get(task_title, 0) + int(duration_minutes)
 
     save_data(data)
+
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
 
@@ -383,6 +482,10 @@ def restore_data(src_path: str) -> tuple[bool, str]:
     except OSError as exc:
         return False, f"Could not write data file: {exc}"
 
+    # Keep the legacy-budgets migration consistent after a restore too,
+    # in case the restored backup pre-dates the goals-based budget system.
+    _migrate_legacy_budgets()
+
     return True, ""
 
 
@@ -409,31 +512,84 @@ def get_background_image_path() -> str:
 
 # ── Goals helpers ─────────────────────────────────────────────────────────────
 
+# Concrete default shape for data["goals"]. Every caller goes through
+# get_goals()/save_goals() rather than touching the dict directly, so this
+# is the single place the shape is defined.
+_DEFAULT_GOALS = {
+    "daily_focus_minutes": 120,
+    "monthly_expense_budget": 0,
+    "category_budgets": {}
+}
+
+
 def get_goals() -> dict:
     """
-    Returns the full goals dict from data.json.
+    Returns the full goals dict from data.json, backfilled with defaults
+    for any missing keys so callers never need their own fallback logic.
 
-    Expected keys (all optional — callers should use .get() with a default):
-        daily_focus_mins      : int   – target focus minutes per day (e.g. 120)
-        monthly_expense_budget: float – overall monthly spending cap
-        category_budgets      : dict  – {category: float} per-category monthly caps
+    Keys:
+        daily_focus_minutes   : int   – target focus minutes per day (default 120)
+        monthly_expense_budget: float – overall monthly spending cap (default 0 = unset)
+        category_budgets      : dict  – {category: float} per-category monthly caps (default {})
+                                          — THIS IS THE SOLE SOURCE OF TRUTH for
+                                          per-category budgets across the whole app.
     """
-    return load_data().get("goals", {})
+    goals = dict(load_data().get("goals", {}))
+    for key, default in _DEFAULT_GOALS.items():
+        if key not in goals:
+            goals[key] = {} if isinstance(default, dict) else default
+    return goals
 
 
 def save_goals(updates: dict) -> None:
     """
-    Merges *updates* into data["goals"] and persists.
-    For nested dicts (e.g. category_budgets) the merge is one level deep:
-    pass the full replacement dict for that sub-key rather than individual entries.
+    Merges *updates* into data["goals"] and persists, backfilling any
+    missing default keys first so the stored dict always has the full shape.
+
+    For "category_budgets", *updates* is merged one level deep into the
+    existing sub-dict (so callers can set/clear a single category without
+    re-sending the whole map). All other keys are simple overwrites.
     """
     if not updates:
         return
     data = load_data()
-    if "goals" not in data:
-        data["goals"] = {}
-    data["goals"].update(updates)
+    goals = dict(data.get("goals", {}))
+    for key, default in _DEFAULT_GOALS.items():
+        if key not in goals:
+            goals[key] = {} if isinstance(default, dict) else default
+
+    for key, value in updates.items():
+        if key == "category_budgets" and isinstance(value, dict):
+            merged = dict(goals.get("category_budgets", {}))
+            for cat, amount in value.items():
+                if amount:
+                    merged[cat] = amount
+                else:
+                    merged.pop(cat, None)
+            goals["category_budgets"] = merged
+        else:
+            goals[key] = value
+
+    data["goals"] = goals
     save_data(data)
+
+
+def set_category_budget(category: str, amount: float) -> None:
+    """
+    Sets (or clears, if amount is falsy/<=0) the monthly budget for a single
+    category inside goals["category_budgets"], via save_goals(). This is the
+    single source of truth for per-category budgets — the legacy
+    data["budgets"] dict is no longer read or written anywhere in the app.
+    """
+    save_goals({"category_budgets": {category: amount}})
+
+
+def get_category_budget(category: str) -> float:
+    """
+    Returns the monthly budget for *category* from goals["category_budgets"],
+    or 0 if no budget has been set for it.
+    """
+    return get_goals().get("category_budgets", {}).get(category, 0)
 
 
 # ── Pomodoro-notes helpers ────────────────────────────────────────────────────

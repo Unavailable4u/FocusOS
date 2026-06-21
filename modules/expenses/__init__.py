@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import data_manager as dm
 from .engine import load_expense_data, save_expense_data, get_filter_date_range, get_filter_banner_string, get_filtered_expenses
 from modules.color_palette import get_expense_color
+from modules.file_dialogs import pick_save_path   # ← P4-T3
 
 # Budget progress bar colours
 _BUDGET_OK      = "#00E676"   # green  — under 80 %
@@ -21,22 +22,24 @@ def _budget_bar_color(ratio: float) -> str:
     return _BUDGET_OK
 
 
-def build_expenses(page: ft.Page):
+def build_expenses(page: ft.Page, initial_query: str = None):
     editing_index        = -1
     current_filter_mode  = "Day"
     selected_anchor_date = datetime.now().date()
     currency_symbol      = dm.get_currency_symbol()
+    search_query          = (initial_query or "").strip().lower()
 
     def populate_dropdowns():
         data = load_expense_data()
         cats = data.get("categories", ["Study", "Food", "Transport", "Other"])
         category_dropdown.options    = [ft.dropdown.Option(c) for c in cats]
         manage_cat_dropdown.options  = [ft.dropdown.Option(c) for c in cats]
-        budget_cat_dropdown.options  = [ft.dropdown.Option(c) for c in cats]
         if cats:
             if category_dropdown.value    not in cats: category_dropdown.value    = cats[0]
             if manage_cat_dropdown.value  not in cats: manage_cat_dropdown.value  = cats[0]
-            if budget_cat_dropdown.value  not in cats: budget_cat_dropdown.value  = cats[0]
+        # Keep the inline budget field's value/label in sync with whichever
+        # category is currently selected in manage_cat_dropdown.
+        _sync_budget_field_to_selected_cat()
 
     # ── FILTER DATE PICKER ────────────────────────────────────────────────────
     _pending_anchor = {"value": None}
@@ -100,33 +103,42 @@ def build_expenses(page: ft.Page):
         entry_picker_dialog.open = True
         page.update()
 
+    # ── P4-T3: export via user-chosen save location ───────────────────────────
     def export_expenses_csv(e):
-        data = load_expense_data()
-        expenses = data.get("expenses", [])
-        desktop_dir = os.path.expanduser("~/Desktop")
-        try:
-            os.makedirs(desktop_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filepath = os.path.join(desktop_dir, f"focusos_export_{timestamp}.csv")
-            with open(filepath, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Title", "Amount", "Category", "Date"])
-                for exp in expenses:
-                    writer.writerow([
-                        exp.get("title", ""),
-                        exp.get("amount", 0),
-                        exp.get("category", ""),
-                        exp.get("date", ""),
-                    ])
-            export_feedback.value = f"Exported {len(expenses)} expense(s) to {filepath}"
-            export_feedback.color = "#81C784"
-        except Exception as ex:
-            export_feedback.value = f"Export failed: {ex}"
-            export_feedback.color = "#FF4B4B"
-        try:
-            export_feedback.update()
-        except Exception:
-            pass
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suggested = f"focusos_expenses_{timestamp}.csv"
+
+        def on_save_result(path: str | None) -> None:
+            if not path:
+                return  # user cancelled — silent no-op
+
+            if not path.lower().endswith(".csv"):
+                path += ".csv"
+
+            ok = dm.export_expenses_csv(path)
+
+            if ok:
+                count = len(load_expense_data().get("expenses", []))
+                msg   = f"Exported {count} expense(s) → {path}"
+                color = "#81C784"
+            else:
+                msg   = f"Export failed — could not write to {path}"
+                color = "#FF4B4B"
+
+            page.open(ft.SnackBar(
+                content=ft.Text(msg, color="#FFFFFF"),
+                bgcolor=color,
+                duration=4000,
+            ))
+            page.update()
+
+        pick_save_path(
+            page,
+            on_result=on_save_result,
+            suggested_name=suggested,
+            allowed_extensions=["csv"],
+        )
+    # ─────────────────────────────────────────────────────────────────────────
 
     # ── FILTER MODE & NAVIGATION ──────────────────────────────────────────────
     def filter_mode_shifted(e):
@@ -205,25 +217,43 @@ def build_expenses(page: ft.Page):
         refresh_expense_view()
 
     # ── BUDGET HELPERS ────────────────────────────────────────────────────────
+    # NOTE: per-category budgets live in goals["category_budgets"] — this is
+    # the single source of truth across the whole app (set_category_budget /
+    # get_category_budget in data_manager.py). The legacy data["budgets"]
+    # dict is no longer read or written here; data_manager.initialize_db()
+    # migrates any old values over automatically.
+
+    def _sync_budget_field_to_selected_cat():
+        """Fills the inline budget field with the currently-set budget
+        (if any) for whichever category is selected in manage_cat_dropdown."""
+        cat = manage_cat_dropdown.value
+        if not cat:
+            inline_budget_input.value = ""
+            inline_budget_input.label = f"Budget ({currency_symbol})"
+            return
+        existing = dm.get_category_budget(cat)
+        inline_budget_input.value = str(int(existing)) if existing else ""
+        inline_budget_input.label = f"Budget for {cat} ({currency_symbol})"
+
+    def manage_cat_dropdown_changed(e):
+        _sync_budget_field_to_selected_cat()
+        try:
+            inline_budget_input.update()
+        except Exception:
+            pass
+
     def save_budget_clicked(e):
-        """Save the budget entered in the settings drawer."""
-        cat = budget_cat_dropdown.value
-        raw = budget_amount_input.value.strip()
+        """Saves the budget entered in the inline field for whichever
+        category is selected in manage_cat_dropdown."""
+        cat = manage_cat_dropdown.value
+        raw = (inline_budget_input.value or "").strip()
         if not cat or not raw:
             return
         try:
             amt = float(raw)
         except ValueError:
             return
-        data = load_expense_data()
-        if "budgets" not in data:
-            data["budgets"] = {}
-        if amt > 0:
-            data["budgets"][cat] = amt
-        else:
-            data["budgets"].pop(cat, None)
-        save_expense_data(data)
-        budget_amount_input.value = ""
+        dm.set_category_budget(cat, amt)
         refresh_expense_view()
 
     def _get_all_time_spent_by_cat() -> dict:
@@ -238,14 +268,14 @@ def build_expenses(page: ft.Page):
             totals[cat] = totals.get(cat, 0.0) + float(exp.get("amount", 0.0))
         return totals
 
-    def build_budget_progress_panel(cats: list, budgets: dict, all_time_totals: dict, currency_symbol: str):
+    def build_budget_progress_panel(cats: list, category_budgets: dict, all_time_totals: dict, currency_symbol: str):
         """
-        For every category that has a budget set, render a labelled
-        progress bar showing spent vs budget.
+        For every category that has a budget set (in goals["category_budgets"]),
+        render a labelled progress bar showing spent vs budget.
         """
         rows = []
         for cat in cats:
-            budget = budgets.get(cat, 0)
+            budget = category_budgets.get(cat, 0)
             if budget <= 0:
                 continue
             spent  = all_time_totals.get(cat, 0.0)
@@ -280,7 +310,7 @@ def build_expenses(page: ft.Page):
         if not rows:
             return ft.Container(
                 content=ft.Text(
-                    "No budgets set yet. Add one above.",
+                    "No budgets set yet. Pick a category above and add one.",
                     size=11, color="grey500", italic=True,
                 ),
                 padding=ft.Padding(4, 6, 4, 6),
@@ -554,8 +584,10 @@ def build_expenses(page: ft.Page):
                 data["categories"].remove(target_cat)
                 data["expenses"] = [exp for exp in data.get("expenses", [])
                                     if exp.get("category") != target_cat]
-                data.get("budgets", {}).pop(target_cat, None)
                 save_expense_data(data)
+                # Budget cleanup goes through the same goals/category_budgets
+                # path as every other budget write — keeps storage unified.
+                dm.set_category_budget(target_cat, 0)
             refresh_expense_view()
 
     def toggle_settings_drawer(e):
@@ -565,6 +597,11 @@ def build_expenses(page: ft.Page):
                              else ft.Icons.SETTINGS_SUGGEST_ROUNDED)
         page.update()
 
+    def handle_search_change(e):
+        nonlocal search_query
+        search_query = (search_field.value or "").strip().lower()
+        refresh_expense_view()
+
     # ── MAIN REFRESH ─────────────────────────────────────────────────────────
     def refresh_expense_view():
         nonlocal currency_symbol
@@ -573,10 +610,15 @@ def build_expenses(page: ft.Page):
         data         = load_expense_data()
         all_expenses = data.get("expenses", [])
         cats         = data.get("categories", ["Study", "Food", "Transport", "Other"])
-        budgets      = data.get("budgets", {})
+        category_budgets = dm.get_goals().get("category_budgets", {})
 
         filtered_items = get_filtered_expenses(all_expenses, current_filter_mode,
                                                selected_anchor_date)
+        if search_query:
+            filtered_items = [
+                item for item in filtered_items
+                if search_query in item[1].get("title", "").lower()
+            ]
 
         populate_dropdowns()
         chart_canvas.sections      = get_pie_sections(filtered_items, cats)
@@ -586,27 +628,31 @@ def build_expenses(page: ft.Page):
         total_spent       = sum(item[1].get("amount", 0.0) for item in filtered_items)
         total_badge.value = f"Selected Total: {currency_symbol}{int(total_spent)}"
 
-        budget_amount_input.label = f"Budget ({currency_symbol})"
-
         legend_container.content      = build_legend_row(filtered_items, cats, currency_symbol)
         ledger_container.content      = build_itemized_ledger(filtered_items, cats, currency_symbol)
         trend_graph_container.content = build_styled_trend_graph(filtered_items, currency_symbol)
 
-        # Budget progress — uses ALL-TIME totals so the bars reflect full spend
+        # Budget progress — uses ALL-TIME totals so the bars reflect full spend,
+        # compared against goals["category_budgets"] (single source of truth).
         all_time_totals = _get_all_time_spent_by_cat()
         budget_panel_container.content = build_budget_progress_panel(
-            cats, budgets, all_time_totals, currency_symbol
+            cats, category_budgets, all_time_totals, currency_symbol
         )
 
         try:
             filter_status_banner.update(); total_badge.update()
             trend_graph_container.update(); chart_canvas.update()
             legend_container.update(); ledger_container.update()
-            budget_panel_container.update(); budget_amount_input.update()
+            budget_panel_container.update(); inline_budget_input.update()
         except Exception:
             pass
 
     # ── UI CONTROLS ───────────────────────────────────────────────────────────
+    search_field = ft.TextField(
+        label="Search expenses...", label_style=ft.TextStyle(color="#45A29E"),
+        border_color="#243142", prefix_icon=ft.Icons.SEARCH_ROUNDED, width=200,
+        value=initial_query or "",
+        on_change=handle_search_change)
     expense_title      = ft.TextField(
         label="Transaction Description...",
         label_style=ft.TextStyle(color="#45A29E"), border_color="#243142")
@@ -629,17 +675,17 @@ def build_expenses(page: ft.Page):
         label="Add New...",
         label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
     manage_cat_dropdown = ft.Dropdown(
-        label="Erase...",
-        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
-
-    # Budget controls
-    budget_cat_dropdown = ft.Dropdown(
         label="Category",
-        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=140)
-    budget_amount_input = ft.TextField(
+        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=140,
+        on_change=manage_cat_dropdown_changed)
+
+    # Inline per-category budget field — sits next to manage_cat_dropdown and
+    # always reflects/edits the budget for whichever category is selected
+    # there. Saves via dm.set_category_budget(), the single source of truth.
+    inline_budget_input = ft.TextField(
         label=f"Budget ({currency_symbol})",
         label_style=ft.TextStyle(color="#45A29E"), border_color="#243142",
-        width=120, height=44, text_size=13, keyboard_type=ft.KeyboardType.NUMBER)
+        width=130, height=44, text_size=12, keyboard_type=ft.KeyboardType.NUMBER)
 
     submit_btn = ft.FilledButton(
         "Log Transaction", icon=ft.Icons.MONETIZATION_ON_ROUNDED,
@@ -650,10 +696,10 @@ def build_expenses(page: ft.Page):
     settings_btn        = ft.IconButton(
         ft.Icons.SETTINGS_SUGGEST_ROUNDED, icon_color="#66FCF1",
         on_click=toggle_settings_drawer)
+    # P4-T3: export_feedback Text removed — SnackBar handles feedback now
     export_btn          = ft.IconButton(
         ft.Icons.DOWNLOAD_ROUNDED, icon_color="#45A29E",
         tooltip="Export expenses to CSV", on_click=export_expenses_csv)
-    export_feedback     = ft.Text("", size=10, color="#8E9AA6")
     filter_status_banner = ft.Text("", size=12, color="#45A29E",
                                     weight=ft.FontWeight.BOLD)
 
@@ -693,24 +739,21 @@ def build_expenses(page: ft.Page):
                 ft.IconButton(ft.Icons.ADD_BOX_ROUNDED,
                               icon_color="#66FCF1", on_click=add_new_cat_trigger),
             ]),
+            # manage_cat_dropdown now does double duty: select a category to
+            # delete it, or to view/edit its monthly budget inline, right here.
             ft.Row([
                 manage_cat_dropdown,
-                ft.IconButton(ft.Icons.DELETE_FOREVER_ROUNDED,
-                              icon_color="#FF4B4B", on_click=delete_cat_trigger),
-            ]),
-            ft.Divider(height=10, color="#243142"),
-            # ── Budget setting ─────────────────────────────────────────────
-            ft.Text("Set Monthly Budget", size=14,
-                    weight=ft.FontWeight.BOLD, color="#66FCF1"),
-            ft.Row([
-                budget_cat_dropdown,
-                budget_amount_input,
+                inline_budget_input,
                 ft.IconButton(ft.Icons.SAVE_ROUNDED,
                               icon_color="#66FCF1",
-                              tooltip="Save budget",
+                              tooltip="Save budget for selected category",
                               on_click=save_budget_clicked),
+                ft.IconButton(ft.Icons.DELETE_FOREVER_ROUNDED,
+                              icon_color="#FF4B4B",
+                              tooltip="Delete selected category",
+                              on_click=delete_cat_trigger),
             ], spacing=6),
-            ft.Text("Set 0 to remove a budget.", size=10,
+            ft.Text("Set budget to 0 to remove it for that category.", size=10,
                     color="grey500", italic=True),
         ], spacing=8),
         bgcolor="#11151D", padding=15, border_radius=12,
@@ -739,7 +782,7 @@ def build_expenses(page: ft.Page):
                         weight=ft.FontWeight.W_600, color="#45A29E"),
                 ft.Row([export_btn, settings_btn], spacing=0),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, width=380),
-            export_feedback,
+            # export_feedback row intentionally removed — SnackBar handles it now
             ft.Container(
                 content=ft.Column([
                     expense_title,
@@ -771,7 +814,7 @@ def build_expenses(page: ft.Page):
             ft.Row([
                 ft.Text("Categorical Distribution Engine", size=18,
                         weight=ft.FontWeight.W_600, color="#45A29E"),
-                total_badge,
+                ft.Row([search_field, total_badge], spacing=12),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ft.Container(
                 content=ft.Column([

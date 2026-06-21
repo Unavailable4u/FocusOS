@@ -11,10 +11,12 @@ except ModuleNotFoundError:
     import data_manager as dm
 
 from modules.glass_theme import create_glass_card
+from modules.file_dialogs import pick_save_path   # ← P4-T2
 
-def build_tasks(page: ft.Page):
+def build_tasks(page: ft.Page, initial_query: str = None):
     editing_task_id = -1
     expanded_comments = {}
+    search_query = (initial_query or "").strip().lower()
 
     QUADRANT_CONFIGS = {
         1: {"label": "Urgent & Important", "color": "#FF4B4B"},      # Red
@@ -43,33 +45,43 @@ def build_tasks(page: ft.Page):
             return f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
         return f"{mins}m"
 
+    # ── P4-T2: export via user-chosen save location ───────────────────────────
     def export_tasks_csv(e):
-        data = dm.load_data()
-        tasks = data.get("tasks", [])
-        desktop_dir = os.path.expanduser("~/Desktop")
-        try:
-            os.makedirs(desktop_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filepath = os.path.join(desktop_dir, f"focusos_export_{timestamp}.csv")
-            with open(filepath, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["ID", "Title", "Quadrant", "Completed", "Due Date", "Comment", "Invested Minutes"])
-                for task in tasks:
-                    writer.writerow([
-                        task.get("id", ""),
-                        task.get("title", ""),
-                        task.get("quadrant", ""),
-                        task.get("completed", False),
-                        task.get("due_date", "") or "",
-                        task.get("comment", "") or "",
-                        get_task_invested_time(task.get("title", "")),
-                    ])
-            export_feedback.value = f"Exported {len(tasks)} task(s) to {filepath}"
-            export_feedback.color = "#81C784"
-        except Exception as ex:
-            export_feedback.value = f"Export failed: {ex}"
-            export_feedback.color = "#FF4B4B"
-        page.update()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suggested = f"focusos_tasks_{timestamp}.csv"
+
+        def on_save_result(path: str | None) -> None:
+            if not path:
+                # User cancelled — do nothing
+                return
+
+            # Ensure the file has a .csv extension even if the OS dialog dropped it
+            if not path.lower().endswith(".csv"):
+                path += ".csv"
+
+            ok = dm.export_tasks_csv(path)
+
+            if ok:
+                msg = f"Exported {len(dm.load_data().get('tasks', []))} task(s) → {path}"
+                color = "#81C784"
+            else:
+                msg = f"Export failed — could not write to {path}"
+                color = "#FF4B4B"
+
+            page.open(ft.SnackBar(
+                content=ft.Text(msg, color="#FFFFFF"),
+                bgcolor=color,
+                duration=4000,
+            ))
+            page.update()
+
+        pick_save_path(
+            page,
+            on_result=on_save_result,
+            suggested_name=suggested,
+            allowed_extensions=["csv"],
+        )
+    # ─────────────────────────────────────────────────────────────────────────
 
     def add_task_clicked(e):
         nonlocal editing_task_id
@@ -225,6 +237,8 @@ def build_tasks(page: ft.Page):
         data = dm.load_data()
         tasks = data.get("tasks", [])
         quad_tasks = [t for t in tasks if t.get("quadrant") == quad_num]
+        if search_query:
+            quad_tasks = [t for t in quad_tasks if search_query in t.get("title", "").lower()]
         
         if not quad_tasks:
             return ft.Container()
@@ -254,6 +268,8 @@ def build_tasks(page: ft.Page):
     def build_compact_status_block(title_text, filter_type, accent_color):
         data = dm.load_data()
         tasks = data.get("tasks", [])
+        if search_query:
+            tasks = [t for t in tasks if search_query in t.get("title", "").lower()]
         
         filtered_items = []
         total_minutes = 0
@@ -319,6 +335,18 @@ def build_tasks(page: ft.Page):
             page.update()
 
     # --- UI CONTROLS ENGINE ---
+    def handle_search_change(e):
+        nonlocal search_query
+        search_query = (search_field.value or "").strip().lower()
+        refresh_matrix_boards(is_initial_load=False)
+
+    search_field = ft.TextField(
+        label="Search tasks...", label_style=ft.TextStyle(color="#45A29E"),
+        border_color="#243142", prefix_icon=ft.Icons.SEARCH_ROUNDED, width=240,
+        value=initial_query or "",
+        on_change=handle_search_change
+    )
+
     task_input = ft.TextField(label="Create New Task Objective...", label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", expand=True)
     comment_input = ft.TextField(label="Add Optional Comment / Note...", label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=260)
     quadrant_dropdown = ft.Dropdown(
@@ -357,8 +385,8 @@ def build_tasks(page: ft.Page):
     ], spacing=0)
 
     submit_btn = ft.FilledButton("Add to Matrix", icon=ft.Icons.ADD_ROUNDED, style=ft.ButtonStyle(bgcolor="#1F2833", color="#66FCF1"), on_click=add_task_clicked)
+    # P4-T2: export_feedback Text control removed; feedback now surfaces via SnackBar
     export_btn = ft.IconButton(ft.Icons.DOWNLOAD_ROUNDED, icon_color="#45A29E", tooltip="Export tasks to CSV", on_click=export_tasks_csv)
-    export_feedback = ft.Text("", size=11, color="#8E9AA6")
 
     left_pane = ft.Container(expand=True, padding=2)
     right_pane = ft.Container(width=420, padding=2)
@@ -374,10 +402,10 @@ def build_tasks(page: ft.Page):
     return ft.Column([
         ft.Row([
             ft.Text("Itemized Matrix Priority Ledger Summary", size=22, weight=ft.FontWeight.W_600, color="#45A29E"),
-            export_btn,
+            ft.Row([search_field, export_btn], spacing=10),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         ft.Row([task_input, comment_input, quadrant_dropdown, due_date_picker_row, submit_btn], spacing=10),
-        export_feedback,
+        # export_feedback row intentionally removed — SnackBar handles feedback now
         ft.Divider(height=15, color="#243142"),
         dual_view_matrix
     ], expand=True)

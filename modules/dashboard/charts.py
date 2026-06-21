@@ -1,6 +1,11 @@
 import flet as ft
+import flet_charts as fch
+from datetime import datetime
+
+import data_manager as dm
 from modules.color_palette import get_unified_color
 from modules.glass_theme import create_glass_card, get_active_glass_theme
+from modules.dashboard import engine
 
 
 def _uniform_border():
@@ -126,34 +131,137 @@ def build_proportional_share_panel(
 
 
 def build_upcoming_goal_pie_panel():
+    """
+    Today's daily-focus-goal completion as a donut chart: a cyan "done"
+    slice vs. a dark-gray "remaining" slice, with the completion
+    percentage centered in the donut hole (flet_charts.PieChart has no
+    built-in center label, so the percentage Text is overlaid on top of
+    the chart via a Stack, matching the chart's center_space_radius hole).
+
+    Falls back to a short "set a goal" prompt when the user hasn't set
+    goals["daily_focus_minutes"] yet (data_manager.get_goals()), since an
+    unset goal means there's no meaningful "remaining" to chart.
+    """
+    goals      = dm.get_goals()
+    daily_goal = goals.get("daily_focus_minutes", 0) or 0
+
+    if daily_goal <= 0:
+        content = ft.Column(
+            [
+                ft.Text(
+                    "Today's Focus Goal",
+                    size=13,
+                    weight=ft.FontWeight.W_600,
+                    color="#FFFFFF",
+                ),
+                ft.Divider(height=10, color="rgba(255,255,255,0.05)"),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Icon(ft.Icons.FLAG_ROUNDED, size=44, color="#45A29E"),
+                            ft.Text(
+                                "Set a daily goal in Settings",
+                                size=12,
+                                color="grey600",
+                                weight=ft.FontWeight.W_500,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    expand=True,
+                    alignment=ft.Alignment(0, 0),
+                ),
+            ]
+        )
+        card = create_glass_card(content, theme_name=None, expand=True, height=220)
+        card.visible = True
+        return card
+
+    raw_data     = dm.load_data()
+    distribution = raw_data.get("hourly_task_distribution", {})
+    today_str    = datetime.now().strftime("%Y-%m-%d")
+    done_mins    = engine._day_total_minutes(distribution, today_str)
+    pct          = (done_mins / daily_goal) * 100 if daily_goal > 0 else 0
+
+    # Chart slices clamp at the goal — a day that blows past 100% just
+    # renders as a full cyan ring; the actual (possibly >100%) percentage
+    # still shows in the center label and subtitle.
+    chart_done      = min(done_mins, daily_goal)
+    chart_remaining = max(0.0, daily_goal - done_mins)
+
+    sections = []
+    if chart_done > 0:
+        sections.append(fch.PieChartSection(
+            value=chart_done, title="", color="#00FFFF", radius=38,
+        ))
+    if chart_remaining > 0:
+        sections.append(fch.PieChartSection(
+            value=chart_remaining, title="", color="#243142", radius=38,
+        ))
+    if not sections:
+        sections.append(fch.PieChartSection(value=1, title="", color="#243142", radius=38))
+
+    donut = fch.PieChart(
+        sections=sections, sections_space=2,
+        center_space_radius=34, height=140, width=140,
+    )
+
+    label_color = "#00FFFF" if pct < 100 else "#00E676"
+    donut_with_label = ft.Stack(
+        [
+            ft.Container(content=donut, alignment=ft.Alignment(0, 0)),
+            ft.Container(
+                content=ft.Text(f"{int(pct)}%", size=20, weight=ft.FontWeight.BOLD, color=label_color),
+                alignment=ft.Alignment(0, 0),
+            ),
+        ],
+        height=140,
+    )
+
+    if pct >= 100:
+        subtitle = f"Goal met — {int(done_mins)}m logged 🎉"
+    else:
+        subtitle = f"{int(done_mins)}m of {int(daily_goal)}m  ·  {int(daily_goal - done_mins)}m to go"
+
+    legend = ft.Row(
+        [
+            ft.Row(
+                [
+                    ft.Container(width=8, height=8, bgcolor="#00FFFF", border_radius=2),
+                    ft.Text("Done", size=11, color="#8E9AA6"),
+                ],
+                spacing=6,
+            ),
+            ft.Row(
+                [
+                    ft.Container(width=8, height=8, bgcolor="#243142", border_radius=2),
+                    ft.Text("Remaining", size=11, color="#8E9AA6"),
+                ],
+                spacing=6,
+            ),
+        ],
+        spacing=16,
+        alignment=ft.MainAxisAlignment.CENTER,
+    )
+
     content = ft.Column(
         [
             ft.Text(
-                "Target Objectives & Sprints Goal Pie Engine",
+                "Today's Focus Goal",
                 size=13,
                 weight=ft.FontWeight.W_600,
                 color="#FFFFFF",
             ),
             ft.Divider(height=10, color="rgba(255,255,255,0.05)"),
-            ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Icon(ft.Icons.PIE_CHART_ROUNDED, size=44, color="#45A29E"),
-                        ft.Text(
-                            "Goals Visualization Suite (Coming Soon)",
-                            size=12,
-                            color="grey600",
-                            weight=ft.FontWeight.W_500,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                expand=True,
-                alignment=ft.Alignment(0, 0),
-            ),
+            ft.Container(height=4),
+            ft.Container(content=donut_with_label, alignment=ft.Alignment(0, 0), expand=True),
+            ft.Text(subtitle, size=11, color="grey600", text_align=ft.TextAlign.CENTER),
+            ft.Container(height=6),
+            legend,
         ]
     )
+
     card = create_glass_card(content, theme_name=None, expand=True, height=220)
-    card.visible = False
+    card.visible = True
     return card
