@@ -19,22 +19,12 @@ def _day_total_minutes(distribution: dict, day_str: str) -> int:
 
 
 def get_focus_streak() -> int:
-    """
-    Counts consecutive days (going backwards from today) where the user
-    logged at least 25 minutes of focus time.
-
-    Rules:
-    • Today is always checked first.
-    • If today has < 25 min we skip it (streak may still be alive from yesterday).
-    • The moment a past day has < 25 min the streak stops.
-    • Returns 0 when there is no streak at all.
-    """
     data         = dm.load_data()
     distribution = data.get("hourly_task_distribution", {})
     today        = datetime.now().date()
     streak       = 0
 
-    for offset in range(0, 365):          # look back up to a year
+    for offset in range(0, 365):
         day_str   = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         day_total = _day_total_minutes(distribution, day_str)
 
@@ -42,35 +32,13 @@ def get_focus_streak() -> int:
             streak += 1
         else:
             if offset == 0:
-                # Today hasn't reached 25 min yet — don't break, check yesterday
                 continue
-            break   # gap in past days — streak is over
+            break
 
     return streak
 
 
 def calculate_focus_streak() -> int:
-    """
-    Counts consecutive days (going backwards from today) where the user's
-    logged focus minutes meet or exceed the goal in goals["daily_focus_minutes"]
-    (via dm.get_goals(), which already backfills a sane default).
-
-    Today-counts-early decision:
-    "Today" is treated the same way get_focus_streak() treats it — it is
-    checked first, and if it hasn't reached the goal yet we DON'T break the
-    streak there, we just skip it and keep walking into yesterday. This is
-    deliberate: a full calendar day hasn't elapsed yet, so a still-in-progress
-    today shouldn't zero out a real streak the user is actively extending.
-    Only a *past* day (offset > 0) that falls short ends the streak — by
-    then the day is closed and there's no more opportunity to hit the goal.
-    One consequence: if "today" is the ONLY day on the books and it hasn't
-    hit the goal yet, this returns 0 for today's offset and then looks for
-    a streak ending yesterday, same as the legacy function.
-
-    Returns 0 when there is no streak at all, or when the goal is 0/unset
-    (a 0-minute goal can't meaningfully be "met", so we don't award a
-    streak for days that merely have zero or no data).
-    """
     data         = dm.load_data()
     distribution = data.get("hourly_task_distribution", {})
     goal_minutes = dm.get_goals().get("daily_focus_minutes", 0)
@@ -80,7 +48,7 @@ def calculate_focus_streak() -> int:
     if not goal_minutes or goal_minutes <= 0:
         return 0
 
-    for offset in range(0, 365):          # look back up to a year
+    for offset in range(0, 365):
         day_str   = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
         day_total = _day_total_minutes(distribution, day_str)
 
@@ -88,30 +56,13 @@ def calculate_focus_streak() -> int:
             streak += 1
         else:
             if offset == 0:
-                # Today hasn't hit the goal yet — the day isn't over, so
-                # don't end the streak here; check whether it was already
-                # alive coming into today (i.e. continued from yesterday).
                 continue
-            break   # a closed-out past day missed the goal — streak is over
+            break
 
     return streak
 
 
 def get_daily_completion_map(num_days: int = 90) -> dict:
-    """
-    Returns {date_str: percentage} for each of the last *num_days* days
-    (today back through today-(num_days-1)), where percentage is how much
-    of goals["daily_focus_minutes"] was hit that day:
-
-        percentage = min(100, total_minutes_that_day / goal_minutes * 100)
-
-    A day with no logged minutes yields 0. If no daily focus goal is set
-    (goal_minutes <= 0), every day in the range yields 0, since "percent of
-    goal" is undefined with no goal to divide by.
-
-    Dates are returned in chronological order (oldest → newest) so the
-    result can be fed straight into a calendar-heatmap style widget.
-    """
     data         = dm.load_data()
     distribution = data.get("hourly_task_distribution", {})
     goal_minutes = dm.get_goals().get("daily_focus_minutes", 0)
@@ -119,7 +70,7 @@ def get_daily_completion_map(num_days: int = 90) -> dict:
 
     completion_map: dict[str, float] = {}
 
-    for offset in range(num_days - 1, -1, -1):   # oldest first, today last
+    for offset in range(num_days - 1, -1, -1):
         day_str = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
 
         if not goal_minutes or goal_minutes <= 0:
@@ -134,20 +85,6 @@ def get_daily_completion_map(num_days: int = 90) -> dict:
 
 
 def get_focus_by_weekday() -> dict:
-    """
-    Buckets every logged focus minute in hourly_task_distribution by weekday
-    name (Monday..Sunday), summed across ALL history regardless of which
-    calendar week or month a given date fell in — answers "which day of the
-    week do I focus most on?" rather than any single week's distribution.
-
-    Reuses _day_total_minutes() per date for the same malformed-data
-    tolerance the streak/heatmap functions already rely on, rather than
-    re-deriving totals by hand.
-
-    Returns a dict with all 7 weekday names always present (Monday first,
-    Sunday last, insertion-ordered) even when a weekday has zero minutes
-    logged, so callers can render a fixed 7-bar chart without gap-filling.
-    """
     data         = dm.load_data()
     distribution = data.get("hourly_task_distribution", {})
 
@@ -160,41 +97,59 @@ def get_focus_by_weekday() -> dict:
         try:
             weekday_name = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
         except ValueError:
-            continue   # malformed date key — skip rather than crash
+            continue
         weekday_totals[weekday_name] += _day_total_minutes(distribution, date_str)
 
     return weekday_totals
 
 
+def get_focus_vs_spending_by_day(num_days: int = 30) -> list[dict]:
+    """
+    Returns a list of dicts, one per calendar day for the last `num_days` days,
+    sorted oldest-first:
+
+        [{"date": "2025-06-01", "focus_mins": 95, "spend": 430.0}, ...]
+
+    focus_mins: sum of all task minutes in hourly_task_distribution for that day.
+    spend:      sum of all expense amounts whose "date" field matches that day.
+    Days with no data for either dimension still appear with 0 values so the
+    chart always shows a continuous date axis.
+    """
+    data         = dm.load_data()
+    distribution = data.get("hourly_task_distribution", {})
+    expenses     = data.get("expenses", [])
+    today        = datetime.now().date()
+
+    # Build day list oldest-first
+    days = [
+        (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        for i in range(num_days - 1, -1, -1)
+    ]
+
+    # Aggregate spend per day
+    spend_by_day: dict[str, float] = {d: 0.0 for d in days}
+    for exp in expenses:
+        if not isinstance(exp, dict):
+            continue
+        exp_date = str(exp.get("date", "")).strip()
+        if exp_date in spend_by_day:
+            try:
+                spend_by_day[exp_date] += float(exp.get("amount", 0.0))
+            except (ValueError, TypeError):
+                continue
+
+    result = []
+    for day_str in days:
+        result.append({
+            "date":       day_str,
+            "focus_mins": _day_total_minutes(distribution, day_str),
+            "spend":      spend_by_day[day_str],
+        })
+
+    return result
+
+
 def get_weekly_summary() -> dict:
-    """
-    Returns aggregated stats for the current 7-day window plus a
-    week-over-week expense comparison against the previous 7-day window.
-
-    Delegates all heavy lifting to parse_aggregated_metrics() so there is
-    no duplicated aggregation logic — this function is purely a thin adapter
-    that calls it twice (time_offset=0 for this week, time_offset=-1 for
-    last week) and shapes the results into a single summary dict.
-
-    Keys returned
-    -------------
-    total_focus_mins     : int   – sum of all focus minutes this week
-    total_focus_hours    : float – total_focus_mins / 60, rounded to 1 dp
-    top_task             : str   – task name with the most minutes ("" if none)
-    top_task_mins        : int   – minutes logged on top_task (0 if none)
-    completed_tasks      : int   – tasks marked completed (global — no date stamp)
-    pending_tasks        : int   – tasks not yet completed (global)
-    this_week_expense    : float – total spend in the current 7-day window
-    last_week_expense    : float – total spend in the previous 7-day window
-    expense_change_pct   : float – % change vs last week:
-                                       None  → last week had no spend (no base)
-                                       +50.0 → spent 50 % more than last week
-                                       -20.0 → spent 20 % less than last week
-                                         0.0 → identical spend both weeks
-    week_start           : str   – oldest date in this week's range, "YYYY-MM-DD"
-    week_end             : str   – newest date in this week's range, "YYYY-MM-DD"
-    """
-    # ── This week (offset=0: today back to today-6) ───────────────────────────
     this_week = parse_aggregated_metrics("Weekly", time_offset=0)
 
     total_focus_mins = int(this_week["total_focus_mins"])
@@ -212,20 +167,13 @@ def get_weekly_summary() -> dict:
     completed_tasks   = int(this_week["completed_tasks"])
     pending_tasks     = int(this_week["pending_tasks"])
 
-    # Derive the human-readable date range from the target_dates list that
-    # parse_aggregated_metrics already computed (always 7 items, oldest first).
     target_dates = this_week.get("target_dates", [])
     week_start   = target_dates[0]  if target_dates else ""
     week_end     = target_dates[-1] if target_dates else ""
 
-    # ── Last week (offset=-1: today-7 back to today-13) ──────────────────────
     last_week         = parse_aggregated_metrics("Weekly", time_offset=-1)
     last_week_expense = float(last_week["total_expense"])
 
-    # ── Week-over-week expense change ─────────────────────────────────────────
-    # None signals "no base to compare against" (avoids a /0 and is more
-    # honest than 0 % or +∞).  When last week had spend we return a signed
-    # percentage rounded to one decimal place.
     if last_week_expense == 0.0:
         expense_change_pct: float | None = None
     else:
@@ -256,12 +204,10 @@ def get_target_dates(current_interval, time_offset):
         return [target.strftime("%Y-%m-%d")]
 
     elif current_interval == "Weekly":
-        # Returns 7 days in chronological order (oldest → newest)
         start = base_today + timedelta(days=(time_offset * 7) - 6)
         return [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
     else:
-        # Monthly: build from oldest to newest so graphs read left→right
         start = base_today + timedelta(days=(time_offset * 30) - 29)
         return [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(30)]
 
@@ -298,7 +244,6 @@ def parse_aggregated_metrics(current_interval, time_offset):
     chrono_distribution = {}
     task_time_breakdown = {}
 
-    # --- FOCUS TIME PROCESSING ---
     distribution_data = data.get("hourly_task_distribution", {})
     for date_str, hours_dict in distribution_data.items():
         if date_str in target_dates and isinstance(hours_dict, dict):
@@ -323,12 +268,10 @@ def parse_aggregated_metrics(current_interval, time_offset):
                                     chrono_distribution[date_str] = {}
                                 chrono_distribution[date_str][task] = chrono_distribution[date_str].get(task, 0) + mins
 
-    # TASK COUNTS
     tasks           = data.get("tasks", [])
     completed_count = len([t for t in tasks if t.get("completed")])
     pending_count   = len(tasks) - completed_count
 
-    # EXPENSE PROCESSING
     total_expense              = 0.0
     category_expense_breakdown = {}
     expenses                   = data.get("expenses", [])
@@ -354,3 +297,56 @@ def parse_aggregated_metrics(current_interval, time_offset):
         "category_expense_breakdown": category_expense_breakdown,
         "target_dates":               target_dates,
     }
+
+
+# ── Badge evaluation ──────────────────────────────────────────────────────────
+
+def evaluate_and_unlock_badges() -> list:
+    data   = dm.load_data()
+    newly_unlocked = []
+
+    if len(data.get("focus_logs", [])) >= 1:
+        if dm.unlock_badge("first_focus"):
+            newly_unlocked.append("first_focus")
+
+    streak = calculate_focus_streak()
+    for badge_id, threshold in [("streak_3", 3), ("streak_7", 7), ("streak_30", 30)]:
+        if streak >= threshold:
+            if dm.unlock_badge(badge_id):
+                newly_unlocked.append(badge_id)
+
+    completed_count = len([t for t in data.get("tasks", []) if t.get("completed")])
+    for badge_id, threshold in [("tasks_10", 10), ("tasks_50", 50)]:
+        if completed_count >= threshold:
+            if dm.unlock_badge(badge_id):
+                newly_unlocked.append(badge_id)
+
+    total_focus_minutes = sum(
+        log.get("duration", 0)
+        for log in data.get("focus_logs", [])
+        if isinstance(log.get("duration"), (int, float))
+    )
+    total_focus_hours = total_focus_minutes / 60
+    for badge_id, threshold in [("focus_10h", 10), ("focus_100h", 100)]:
+        if total_focus_hours >= threshold:
+            if dm.unlock_badge(badge_id):
+                newly_unlocked.append(badge_id)
+
+    if len(data.get("expenses", [])) >= 10:
+        if dm.unlock_badge("expense_logged_10"):
+            newly_unlocked.append("expense_logged_10")
+
+    monthly_budget = dm.get_goals().get("monthly_expense_budget", 0)
+    if monthly_budget and monthly_budget > 0:
+        now        = datetime.now()
+        month_str  = now.strftime("%Y-%m")
+        month_spend = sum(
+            float(exp.get("amount", 0))
+            for exp in data.get("expenses", [])
+            if str(exp.get("date", "")).startswith(month_str)
+        )
+        if month_spend < monthly_budget:
+            if dm.unlock_badge("budget_month"):
+                newly_unlocked.append("budget_month")
+
+    return newly_unlocked

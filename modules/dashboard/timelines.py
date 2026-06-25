@@ -3,21 +3,14 @@ from datetime import datetime, timedelta
 from modules.color_palette import get_task_color, get_expense_color
 
 # ---------------------------------------------------------------------------
-# Color helpers — thin wrappers so call-sites stay unchanged
+# Color helpers
 # ---------------------------------------------------------------------------
 
 def get_focus_color(task_name: str) -> str:
-    """Delegates to the canonical palette; unknown tasks fall back to grey."""
     if not task_name:
         return "#546E7A"
     color = get_task_color(str(task_name).strip())
-    # get_task_color already handles unknowns via hash, but keep a dark-grey
-    # floor so empty/null-ish names stay readable on dark backgrounds.
     return color if color else "#546E7A"
-
-
-# get_expense_color is re-exported directly from color_palette — just alias it.
-# (The import at the top already brings it in.)
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +18,6 @@ def get_focus_color(task_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _fmt_mins(total_mins: float) -> str:
-    """Format a minutes value as 'Xh Ym' or 'Ym' for bar labels."""
     m = int(total_mins)
     h, rem = divmod(m, 60)
     if h > 0:
@@ -34,7 +26,6 @@ def _fmt_mins(total_mins: float) -> str:
 
 
 def clean_date_string(raw_date):
-    """Ensures input dates are zero-padded to match YYYY-MM-DD exactly."""
     try:
         if isinstance(raw_date, str):
             parts = raw_date.strip().split('-')
@@ -50,11 +41,6 @@ def clean_date_string(raw_date):
 # ---------------------------------------------------------------------------
 
 def _build_avg_focus_bar(avg_mins: float, max_hour_total: float) -> ft.Column:
-    """
-    Grey outlined AVG reference column for the focus timeline graph.
-    Shows a dashed-border container scaled to the average height, with the
-    average minutes label centred inside and "AVG" axis label below.
-    """
     GRAPH_H = 135
     avg_bar_height = max(6, int((avg_mins / max(max_hour_total, 1)) * GRAPH_H))
     transparent_h = GRAPH_H - avg_bar_height
@@ -95,9 +81,6 @@ def _build_avg_focus_bar(avg_mins: float, max_hour_total: float) -> ft.Column:
 
 
 def _build_avg_expense_bar(avg_amt: float, max_val: float, currency_symbol: str = "৳") -> ft.Column:
-    """
-    Grey outlined AVG reference column for the expense trend graph.
-    """
     GRAPH_H = 135
     avg_bar_height = max(6, int((avg_amt / max(max_val, 1)) * GRAPH_H))
     transparent_h = GRAPH_H - avg_bar_height
@@ -157,10 +140,8 @@ def build_chrono_timeline_graph(current_interval, distribution_dict, target_date
             non_zero_values.append(total)
         max_hour_total = max(max_hour_total, total)
 
-    # Average across all columns that carry data (avoid skewing by empty slots)
     avg_mins = (sum(non_zero_values) / len(non_zero_values)) if non_zero_values else 0
 
-    # Determine axis keys
     if current_interval == "Daily":
         sorted_keys = [str(h) for h in range(24)]
     else:
@@ -169,11 +150,9 @@ def build_chrono_timeline_graph(current_interval, distribution_dict, target_date
         else:
             sorted_keys = sorted(distribution_dict.keys())
 
-    # ── AVG reference bar — prepended before data columns ───────────────────
     if avg_mins > 0:
         graph_columns.append(_build_avg_focus_bar(avg_mins, max_hour_total))
 
-    # ── Data columns ─────────────────────────────────────────────────────────
     for axis_key in sorted_keys:
         hour_data = distribution_dict.get(axis_key, {})
         stacked_segments = []
@@ -197,7 +176,6 @@ def build_chrono_timeline_graph(current_interval, distribution_dict, target_date
                         )
                     )
 
-            # Value label above the bar
             value_label = ft.Text(
                 _fmt_mins(total_mins),
                 size=7,
@@ -205,7 +183,6 @@ def build_chrono_timeline_graph(current_interval, distribution_dict, target_date
                 weight=ft.FontWeight.BOLD,
                 text_align=ft.TextAlign.CENTER,
             )
-            # Shrink transparent spacer to make room for the label (≈10px)
             transparent_space_height = max(0, transparent_space_height - 10)
         else:
             transparent_space_height = 131
@@ -304,10 +281,6 @@ def build_chrono_timeline_graph(current_interval, distribution_dict, target_date
 
 
 def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list, currency_symbol: str = "৳"):
-    """
-    current_interval — "Daily" | "Weekly" | "Monthly"
-    The AVG reference bar is only injected for Weekly and Monthly views.
-    """
     clean_targets = [clean_date_string(d) for d in target_dates]
     day_totals = {d: 0.0 for d in clean_targets}
     day_categories = {d: {} for d in clean_targets}
@@ -333,11 +306,9 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list,
 
     columns = []
 
-    # ── AVG reference bar (Weekly / Monthly only) ────────────────────────────
     if current_interval in ("Weekly", "Monthly") and avg_amt > 0:
         columns.append(_build_avg_expense_bar(avg_amt, max_val, currency_symbol))
 
-    # ── Data columns ─────────────────────────────────────────────────────────
     for day_stamp in sorted(day_totals.keys()):
         total_amt = day_totals[day_stamp]
         total_bar_height = max(4, int((total_amt / max_val) * 135))
@@ -379,7 +350,6 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list,
         except ValueError:
             parsed_label = day_stamp[-2:]
 
-        # Value label above bar
         if total_amt > 0:
             value_label = ft.Text(
                 f"{currency_symbol}{int(total_amt)}",
@@ -460,25 +430,7 @@ def build_expense_trend_graph(current_interval, target_dates, raw_expenses_list,
 
 
 def build_weekday_focus_graph(weekday_totals: dict) -> ft.Container:
-    """
-    Simple 7-bar chart: total focus minutes per weekday (Mon..Sun), summed
-    across ALL logged history regardless of which calendar week or month a
-    given day fell in. Answers "which day of the week do I focus most on?"
-    — distinct from the streak heatmap (per-calendar-day) and the existing
-    trend graphs (per-specific-date), since this collapses every date down
-    to one of 7 weekday buckets.
-
-    Reuses the same bar-column visual language as build_chrono_timeline_graph
-    (transparent spacer above a value-proportional bar, value label, axis
-    label below) but with one flat-colored bar per weekday instead of a
-    per-task stacked column — there's no per-task breakdown to show here,
-    just a single total per weekday.
-
-    weekday_totals — dict as returned by engine.get_focus_by_weekday():
-    {"Monday": mins, "Tuesday": mins, ..., "Sunday": mins}, all 7 keys
-    always present.
-    """
-    BAR_COLOR = "#7C4DFF"   # fresh accent, distinct from every other graph's color
+    BAR_COLOR = "#7C4DFF"
     GRAPH_H = 135
 
     weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -488,7 +440,7 @@ def build_weekday_focus_graph(weekday_totals: dict) -> ft.Container:
     }
 
     max_total = max(weekday_totals.values()) if weekday_totals else 0
-    max_total = max(max_total, 1)  # avoid div-by-zero when nothing's logged yet
+    max_total = max(max_total, 1)
 
     columns = []
     for day_name in weekday_order:
@@ -496,7 +448,7 @@ def build_weekday_focus_graph(weekday_totals: dict) -> ft.Container:
 
         if total_mins > 0:
             bar_height = max(6, int((total_mins / max_total) * GRAPH_H))
-            transparent_h = max(0, (GRAPH_H - bar_height) - 10)  # room for the value label
+            transparent_h = max(0, (GRAPH_H - bar_height) - 10)
             value_label = ft.Text(
                 _fmt_mins(total_mins),
                 size=7,
@@ -755,4 +707,178 @@ def build_monthly_horizontal_focus_graph(raw_hourly_distribution_data):
             ft.BorderSide(1, "rgba(255,255,255,0.05)"),
             ft.BorderSide(1, "rgba(255,255,255,0.05)"),
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# NEW: Focus vs. Spending correlation chart
+# ---------------------------------------------------------------------------
+
+def build_focus_vs_spending_chart(num_days: int = 30,
+                                   currency_symbol: str = "৳") -> ft.Container:
+    """
+    Dual-axis bar chart: side-by-side cyan (focus mins) and orange (spend)
+    bars for each of the last `num_days` calendar days, oldest-first.
+    Both bar columns share 180px max height but scale independently
+    (focus axis vs. spend axis are separate).
+    """
+    from .engine import get_focus_vs_spending_by_day
+
+    GRAPH_H   = 180
+    BAR_W     = 6    # width of each individual segment bar
+    DAY_GAP   = 3    # gap between left/right bars within a day
+    COL_GAP   = 4    # gap between day columns
+    FOCUS_CLR = "#00FFFF"
+    SPEND_CLR = "#FF9100"
+
+    rows = get_focus_vs_spending_by_day(num_days)
+
+    all_focus = [r["focus_mins"] for r in rows]
+    all_spend = [r["spend"]      for r in rows]
+    max_focus = max(all_focus) if any(f > 0 for f in all_focus) else 1
+    max_spend = max(all_spend) if any(s > 0 for s in all_spend) else 1
+
+    # No-data guard
+    if all(f == 0 for f in all_focus) and all(s == 0 for s in all_spend):
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "Focus vs. Spending — Last 30 Days",
+                        size=12, color="grey500",
+                    ),
+                    ft.Container(
+                        content=ft.Text(
+                            "No data yet",
+                            size=13, color="grey600", italic=True,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        alignment=ft.Alignment(0, 0),
+                        expand=True,
+                    ),
+                ],
+                spacing=6,
+            ),
+            bgcolor="#11151D",
+            border_radius=10,
+            padding=10,
+            height=240,
+        )
+
+    day_columns = []
+    for i, row in enumerate(rows):
+        focus_mins = row["focus_mins"]
+        spend_amt  = row["spend"]
+        date_str   = row["date"]
+
+        focus_h = max(2, int((focus_mins / max_focus) * GRAPH_H)) if focus_mins > 0 else 0
+        spend_h = max(2, int((spend_amt  / max_spend)  * GRAPH_H)) if spend_amt  > 0 else 0
+
+        focus_spacer = GRAPH_H - focus_h
+        spend_spacer = GRAPH_H - spend_h
+
+        # X-axis label: day-of-month every 5th day
+        try:
+            dom = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d")
+        except ValueError:
+            dom = date_str[-2:]
+        x_label = dom if (i % 5 == 0) else ""
+
+        focus_col = ft.Column(
+            [
+                ft.Container(width=BAR_W, height=focus_spacer, bgcolor="transparent"),
+                ft.Container(
+                    width=BAR_W,
+                    height=focus_h if focus_h > 0 else 2,
+                    bgcolor=FOCUS_CLR if focus_h > 0 else "transparent",
+                    border_radius=2,
+                    tooltip=f"{date_str}\nFocus: {int(focus_mins)}m",
+                ),
+            ],
+            spacing=0,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        spend_col = ft.Column(
+            [
+                ft.Container(width=BAR_W, height=spend_spacer, bgcolor="transparent"),
+                ft.Container(
+                    width=BAR_W,
+                    height=spend_h if spend_h > 0 else 2,
+                    bgcolor=SPEND_CLR if spend_h > 0 else "transparent",
+                    border_radius=2,
+                    tooltip=f"{date_str}\nSpend: {currency_symbol}{spend_amt:,.0f}",
+                ),
+            ],
+            spacing=0,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        day_col = ft.Column(
+            [
+                ft.Row(
+                    [focus_col, spend_col],
+                    spacing=DAY_GAP,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                ),
+                ft.Text(
+                    x_label,
+                    size=8,
+                    color="#8E9AA6",
+                    weight=ft.FontWeight.BOLD,
+                    text_align=ft.TextAlign.CENTER,
+                    width=(BAR_W * 2 + DAY_GAP),
+                ),
+            ],
+            spacing=3,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        day_columns.append(day_col)
+
+    legend = ft.Row(
+        [
+            ft.Row(
+                [
+                    ft.Container(width=10, height=10, bgcolor=FOCUS_CLR, border_radius=2),
+                    ft.Text("Focus (min)", size=11, color=FOCUS_CLR),
+                ],
+                spacing=5,
+            ),
+            ft.Row(
+                [
+                    ft.Container(width=10, height=10, bgcolor=SPEND_CLR, border_radius=2),
+                    ft.Text(f"Spend ({currency_symbol})", size=11, color=SPEND_CLR),
+                ],
+                spacing=5,
+            ),
+        ],
+        spacing=16,
+    )
+
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Text(
+                    "Focus vs. Spending — Last 30 Days",
+                    size=12, color="grey500",
+                ),
+                ft.Container(height=4),
+                legend,
+                ft.Container(height=6),
+                ft.Container(
+                    content=ft.Row(
+                        controls=day_columns,
+                        spacing=COL_GAP,
+                        alignment=ft.MainAxisAlignment.START,
+                        scroll=ft.ScrollMode.ADAPTIVE,
+                    ),
+                    padding=ft.Padding(4, 4, 4, 0),
+                ),
+            ],
+            spacing=0,
+        ),
+        bgcolor="#11151D",
+        border_radius=10,
+        padding=10,
     )

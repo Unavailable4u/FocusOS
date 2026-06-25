@@ -7,6 +7,22 @@ from datetime import datetime
 DATA_FILE = "data.json"
 
 
+# ── Badge definitions ─────────────────────────────────────────────────────────
+
+BADGE_DEFINITIONS = {
+    "first_focus":        {"label": "First Focus",        "icon": "🎯", "desc": "Complete your first focus session"},
+    "streak_3":           {"label": "3-Day Streak",        "icon": "🔥", "desc": "3 consecutive days of focus"},
+    "streak_7":           {"label": "Week Warrior",        "icon": "⚡", "desc": "7-day focus streak"},
+    "streak_30":          {"label": "Iron Discipline",     "icon": "💎", "desc": "30-day focus streak"},
+    "tasks_10":           {"label": "Task Crusher",        "icon": "✅", "desc": "Complete 10 tasks"},
+    "tasks_50":           {"label": "Productivity Master", "icon": "🏆", "desc": "Complete 50 tasks"},
+    "budget_month":       {"label": "Budget Hero",         "icon": "💰", "desc": "Stay under budget for a full month"},
+    "focus_10h":          {"label": "Deep Worker",         "icon": "🧠", "desc": "Log 10 total hours of focus"},
+    "focus_100h":         {"label": "Century Club",        "icon": "🌟", "desc": "Log 100 total hours of focus"},
+    "expense_logged_10":  {"label": "Accountant",          "icon": "📊", "desc": "Log 10 expenses"},
+}
+
+
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {
@@ -372,6 +388,26 @@ def get_currency_symbol() -> str:
     """
     symbol = get_settings().get("currency_symbol", "৳")
     return symbol if symbol else "৳"
+
+
+# ── Badge helpers ─────────────────────────────────────────────────────────────
+
+def get_unlocked_badges() -> list:
+    """Returns the list of unlocked badge IDs from settings."""
+    return list(get_settings().get("unlocked_badges", []))
+
+
+def unlock_badge(badge_id: str) -> bool:
+    """
+    Unlocks badge_id if not already unlocked.
+    Returns True if this is a new unlock, False if already had it.
+    """
+    current = get_unlocked_badges()
+    if badge_id in current:
+        return False
+    current.append(badge_id)
+    save_settings({"unlocked_badges": current})
+    return True
 
 
 # ── Color override helpers ────────────────────────────────────────────────────

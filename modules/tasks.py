@@ -12,7 +12,74 @@ except ModuleNotFoundError:
 from modules.glass_theme import create_glass_card
 from modules.file_dialogs import pick_save_path   # ← P4-T2
 
-def build_tasks(page: ft.Page, initial_query: str = None):
+# ── Native desktop notifications (Windows only) ──────────────────────────────
+# Same pattern as modules/pomodoro/pomodoro.py: win10toast wraps the Windows
+# balloon-notification API and isn't importable on macOS/Linux, so the import
+# itself is gated behind os.name == "nt" *and* wrapped in try/except — either
+# guard alone would be enough, but together they mean this file behaves
+# identically on every platform even if win10toast is missing or broken.
+_toaster = None
+if os.name == "nt":
+    try:
+        from win10toast import ToastNotifier
+        _toaster = ToastNotifier()
+    except ImportError:
+        _toaster = None
+
+
+def _notify(title: str, message: str, duration: int = 5) -> None:
+    """
+    Fires a native Windows toast. No-op on any other platform, and any
+    failure (missing dependency, OS-level toast error) is swallowed so it
+    can never block or crash app startup.
+    """
+    if _toaster is None:
+        return
+    try:
+        _toaster.show_toast(title, message, duration=duration, threaded=True)
+    except Exception:
+        pass
+
+
+def check_overdue_tasks_and_notify() -> int:
+    """
+    Scans all incomplete tasks for a due_date in the past and fires a single
+    summary toast if any are found.
+
+    Intended to be called once on app launch (e.g. from main.py's _launch(),
+    after onboarding completes) — not on every render of the Tasks tab,
+    since that would re-fire the toast on every navigation.
+
+    Returns the number of overdue tasks found (0 if none, or if win10toast
+    isn't available — the count is still useful for callers that want to
+    show their own in-app banner instead of/in addition to the toast).
+    """
+    try:
+        data = dm.load_data()
+        tasks = data.get("tasks", [])
+    except Exception:
+        return 0
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    overdue = [
+        t for t in tasks
+        if not t.get("completed") and t.get("due_date") and t["due_date"] < today_str
+    ]
+
+    if not overdue:
+        return 0
+
+    count = len(overdue)
+    if count == 1:
+        message = f'"{overdue[0].get("title", "Untitled Task")}" is overdue.'
+    else:
+        message = f"{count} tasks are overdue. Check your priority matrix."
+
+    _notify("Overdue Tasks ⚠", message)
+    return count
+
+
+def build_tasks(page: ft.Page, initial_query: str = None, on_focus_task=None):
     editing_task_id = -1
     expanded_comments = {}
     search_query = (initial_query or "").strip().lower()
@@ -183,11 +250,25 @@ def build_tasks(page: ft.Page, initial_query: str = None):
             on_click=make_toggle_handler()
         )
 
+        def handle_focus_click(e, title=task_title):
+            if on_focus_task is not None:
+                on_focus_task(title)
+
+        focus_btn = ft.IconButton(
+            ft.Icons.TIMER_ROUNDED,
+            icon_color="#00FFFF",
+            icon_size=16,
+            tooltip="Focus on this task",
+            visible=on_focus_task is not None,
+            on_click=handle_focus_click,
+        )
+
         trailing_controls = ft.Row([
             ft.IconButton(ft.Icons.COMMENT_ROUNDED, icon_size=16, icon_color="#45A29E" if not task["completed"] else "rgba(255,255,255,0.1)", on_click=make_comment_handler()) if has_comment and not compact_view else ft.Container(),
+            focus_btn,
             ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=16, icon_color="#45A29E", on_click=make_edit_handler()),
             ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=16, icon_color="#FF4B4B", on_click=make_delete_handler()),
-        ], spacing=0, alignment=ft.MainAxisAlignment.END, width=110 if (has_comment and not compact_view) else (80 if not compact_view else 60))
+        ], spacing=0, alignment=ft.MainAxisAlignment.END, width=(136 if (has_comment and not compact_view) else (106 if not compact_view else 86)) if (on_focus_task is not None) else (110 if (has_comment and not compact_view) else (80 if not compact_view else 60)))
 
         text_decor = ft.TextDecoration.LINE_THROUGH if (task["completed"] and not compact_view) else None
 
@@ -396,7 +477,7 @@ def build_tasks(page: ft.Page, initial_query: str = None):
 
     due_date_picker_row = ft.Row([
         due_date_display,
-        ft.IconButton(ft.Icons.CALENDAR_MONTH_ROUNDED, icon_color="#45A29E", tooltip="Pick due date", on_click=lambda e: due_date_picker.pick_date()),
+        ft.IconButton(ft.Icons.CALENDAR_MONTH_ROUNDED, icon_color="#45A29E", tooltip="Pick due date",on_click=lambda e: (setattr(due_date_picker, 'open', True), page.update())),
         ft.IconButton(ft.Icons.CLOSE_ROUNDED, icon_color="#8E9AA6", icon_size=16, tooltip="Clear due date", on_click=clear_due_date),
     ], spacing=0)
 

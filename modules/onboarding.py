@@ -78,11 +78,15 @@ def show_onboarding_if_needed(page: ft.Page, on_complete: callable) -> None:
     on_complete : callable — zero-argument callback invoked when the wizard
                   finishes (either after Step 3 or if the user skips).
     """
-    if dm.get_settings().get("onboarding_complete"):
-        on_complete()
-        return
+    async def _deferred():
+        import asyncio
+        await asyncio.sleep(0.1)
+        if dm.get_settings().get("onboarding_complete"):
+            on_complete()
+        else:
+            _run_wizard(page, on_complete)
 
-    _run_wizard(page, on_complete)
+    page.run_task(_deferred)
 
 
 # ── Internal wizard implementation ───────────────────────────────────────────

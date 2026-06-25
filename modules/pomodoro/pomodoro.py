@@ -16,9 +16,43 @@ from .clock_face import generate_precision_radial_clock
 
 _global_timer_session = None
 
+# ── Native desktop notifications (Windows only) ──────────────────────────────
+# win10toast wraps the Windows balloon-notification API and has no effect
+# (and isn't importable) on macOS/Linux, so everything here is guarded by
+# both a platform check and an ImportError fallback — the app must keep
+# working identically on every OS even though this feature is Windows-only.
+_toaster = None
+if os.name == "nt":
+    try:
+        from win10toast import ToastNotifier
+        _toaster = ToastNotifier()
+    except ImportError:
+        _toaster = None
+
+
+def _notify(title: str, message: str, duration: int = 5) -> None:
+    """
+    Fires a native Windows toast notification. No-op on any other platform,
+    and any failure here (missing dependency, OS-level toast error, etc.)
+    is swallowed so it can never interrupt or crash the timer flow.
+
+    threaded=True is required: ToastNotifier.show_toast() otherwise blocks
+    the calling thread for the full `duration`, which would freeze this
+    page's async tick loop and the rest of the Flet UI along with it.
+    """
+    if _toaster is None:
+        return
+    try:
+        _toaster.show_toast(
+            title,
+            message,
+            duration=duration,
+            threaded=True,
+        )
+    except Exception:
+        pass
+
 # ── Ambient sound constants ──────────────────────────────────────────────────
-# Keys map to asset paths under assets/sounds/.
-# "None" is a sentinel meaning no sound is active.
 AMBIENT_SOUNDS = {
     "None":        None,
     "Rain":        "assets/sounds/rain.mp3",
@@ -26,26 +60,10 @@ AMBIENT_SOUNDS = {
     "Lo-fi":       "assets/sounds/lofi.mp3",
 }
 
-# Tag placed on the ft.Audio overlay control so we can locate and remove it.
 _AUDIO_OVERLAY_TAG = "__ambient_audio__"
 
 
 def _get_task_color(task_name, data=None):
-    """
-    Single source-of-truth color lookup for this page.
-    Delegates to modules/color_palette.py so focus bars, the clock view,
-    and the legend all share exactly the same hues as the rest of the app.
-
-    Passes the current list of DB task titles as `all_known_tasks` so
-    overflow colors are assigned by stable index (matching legacy
-    get_task_color_signature behavior) rather than pure hash, wherever
-    possible.
-
-    `data`, if supplied, is a pre-loaded dm.load_data() snapshot. Passing it
-    avoids re-reading data.json from disk on every single call (this used
-    to be the #1 cause of the page-open delay: dozens of calls per build,
-    each doing its own disk read + JSON parse).
-    """
     try:
         if data is None:
             data = dm.load_data()
@@ -53,6 +71,41 @@ def _get_task_color(task_name, data=None):
     except Exception:
         db_tasks = []
     return get_task_color(task_name, all_known_tasks=db_tasks)
+
+
+def get_mini_timer_text() -> tuple:
+    """
+    Returns (display_string, should_be_visible).
+    display_string: e.g. "23:41  ·  Reading  ▶"
+    should_be_visible: True once the timer has been started at least once.
+    """
+    s = _global_timer_session
+    if s is None:
+        return "", False
+    task = s.get("selected_task", "General Study")
+    mode = s.get("current_mode", "Focus")
+    running = s.get("timer_running", False)
+
+    if mode == "Focus":
+        remaining = s.get("total_focus_remaining", 0)
+        seg_elapsed = s.get("current_segment_elapsed", 0)
+        sprint_total = min(25 * 60, remaining + seg_elapsed)
+        secs = max(0, sprint_total - seg_elapsed)
+    else:
+        secs = max(0, s.get("break_time_remaining", 0))
+
+    mins, sec = divmod(secs, 60)
+    time_str = f"{mins:02d}:{sec:02d}"
+    icon = "▶" if running else "⏸"
+    mode_label = "" if mode == "Focus" else f" [{mode}]"
+    text = f"{time_str}  ·  {task}{mode_label}  {icon}"
+
+    # Visible only after the user has started the timer at least once
+    # (i.e. the session has been touched — completed_sprints > 0 or timer ran)
+    ever_started = (s.get("completed_sprints", 0) > 0
+                    or s.get("current_segment_elapsed", 0) > 0
+                    or running)
+    return text, ever_started
 
 
 def build_pomodoro(page: ft.Page):
@@ -71,14 +124,12 @@ def build_pomodoro(page: ft.Page):
             "selected_task": "General Study",
             "live_timer_text": None,
             "live_progress_bar": None,
-            # ── Ambient sound state ──────────────────────────────────────────
             "sound_enabled": False,
             "sound_src": "None",
+            "pending_task_selection": None,
         }
 
     state = _global_timer_session
-
-    # ── Single disk read for the whole build ────────────────────────────────
     data_now = dm.load_data()
 
     def get_config_durations():
@@ -100,7 +151,6 @@ def build_pomodoro(page: ft.Page):
         config = get_config_durations()
         target_text = state["live_timer_text"] if state["live_timer_text"] else timer_text
         target_progress = state["live_progress_bar"] if state["live_progress_bar"] else progress_bar
-
         selected_task = state["selected_task"]
         active_color_token = _get_task_color(selected_task)
 
@@ -162,14 +212,12 @@ def build_pomodoro(page: ft.Page):
     # ── Ambient sound helpers ────────────────────────────────────────────────
 
     def _find_audio_overlay():
-        """Return the existing ft.Audio overlay control, or None."""
         for ctrl in page.overlay:
             if getattr(ctrl, "data", None) == _AUDIO_OVERLAY_TAG:
                 return ctrl
         return None
 
     def _remove_audio_overlay():
-        """Remove the ft.Audio control from page.overlay if present."""
         audio_ctrl = _find_audio_overlay()
         if audio_ctrl is not None:
             try:
@@ -183,16 +231,7 @@ def build_pomodoro(page: ft.Page):
                 pass
 
     def _add_audio_overlay(src: str):
-        """
-        Create a looping ft.Audio control and attach it to page.overlay.
-
-        ft.Audio does not have a native `loop` parameter in flet 0.85.x, so
-        we simulate looping by restarting playback inside `on_state_changed`
-        whenever the audio reaches the completed/stopped state.
-        """
         def _on_audio_state(e):
-            # AudioState values: playing=1, paused=2, stopped=3, completed=4
-            # Restart when finished (completed) only if sound is still enabled.
             if state["sound_enabled"] and e.data in ("completed", "3", "4"):
                 try:
                     audio_ctrl.play()
@@ -204,7 +243,7 @@ def build_pomodoro(page: ft.Page):
             src=src,
             autoplay=True,
             volume=0.6,
-            data=_AUDIO_OVERLAY_TAG,  # marker so we can find & remove it
+            data=_AUDIO_OVERLAY_TAG,
             on_state_changed=_on_audio_state,
         )
         page.overlay.append(audio_ctrl)
@@ -214,12 +253,7 @@ def build_pomodoro(page: ft.Page):
             pass
 
     def _apply_sound_state():
-        """
-        Reconcile page.overlay with the current sound state.
-        Called whenever the toggle or the dropdown changes.
-        """
         _remove_audio_overlay()
-
         if state["sound_enabled"]:
             src = AMBIENT_SOUNDS.get(state["sound_src"])
             if src:
@@ -231,16 +265,12 @@ def build_pomodoro(page: ft.Page):
 
     def on_sound_select(e):
         state["sound_src"] = sound_dropdown.value or "None"
-        # If already enabled, swap to the new sound immediately.
         if state["sound_enabled"]:
             _apply_sound_state()
 
     # ── Post-session note dialog ─────────────────────────────────────────────
 
     def _show_pomodoro_note_dialog(task_name: str, on_done_callback):
-        """
-        Opens a small AlertDialog asking the user what they accomplished.
-        """
         note_field = ft.TextField(
             label="What did you accomplish?",
             label_style=ft.TextStyle(color="#00FFFF"),
@@ -348,6 +378,9 @@ def build_pomodoro(page: ft.Page):
                 break_color = "#FF1744"
                 break_status = "Status: Auto Short Break! ⚡"
 
+            _notify("Focus segment complete!",
+                    f"Nice work on \"{state['selected_task']}\". Time for a break.")
+
             def _start_break_after_note():
                 state["current_mode"] = next_mode
                 target_text.color = break_color
@@ -373,6 +406,8 @@ def build_pomodoro(page: ft.Page):
 
         selected_task = state["selected_task"]
         target_text.color = _get_task_color(selected_task)
+
+        _notify("Break's over!", "Back to focus mode. You've got this.")
 
         status_badge.value = "Status: Continuing Focus Pool... 🎯"
         start_btn.visible, stop_btn.visible, skip_break_btn.visible = False, True, False
@@ -627,6 +662,19 @@ def build_pomodoro(page: ft.Page):
         state["selected_task"] = "General Study"
         task_dropdown.value = "General Study"
 
+    # ── Deep-link pre-fill (P12-T1) ──────────────────────────────────────────
+    # If main.py's switch_to_pomodoro_with_task() set a pending task title
+    # before navigating here, it takes priority over the restored
+    # state["selected_task"] above. Cleared immediately after use so it
+    # only ever applies to the one build_pomodoro() call that follows the
+    # deep-link click, not to any subsequent tab switch.
+    pending_task = state.get("pending_task_selection")
+    if pending_task is not None:
+        if pending_task in valid_task_keys:
+            task_dropdown.value = pending_task
+            state["selected_task"] = pending_task
+        state["pending_task_selection"] = None
+
     theme_dropdown = ft.Dropdown(label="Customize Glass Tint", label_style=ft.TextStyle(color="#00FFFF"), value=state["active_theme"], options=[ft.dropdown.Option(t) for t in GLASS_THEMES.keys()], border_color="rgba(255,255,255,0.2)", width=340, on_select=change_page_atmosphere)
 
     # ── Ambient sound controls ───────────────────────────────────────────────
@@ -746,7 +794,6 @@ def build_pomodoro(page: ft.Page):
             start_btn.visible, stop_btn.visible, skip_break_btn.visible = False, False, True
 
     # Restore ambient audio if it was active before a tab switch.
-    # (page.overlay may have been cleared; re-attach if needed.)
     if state["sound_enabled"] and _find_audio_overlay() is None:
         src = AMBIENT_SOUNDS.get(state["sound_src"])
         if src:
@@ -755,9 +802,6 @@ def build_pomodoro(page: ft.Page):
     toggle_inputs(disabled=state["timer_running"])
     update_timer_display()
 
-    # ── Keyboard-accessible timer toggle ─────────────────────────────────────
-    # Exposed so main.py can call it when Space is pressed while this tab is
-    # active.  Mirrors the exact same guard logic as start_timer / stop_timer.
     def toggle_timer():
         if state["timer_running"]:
             stop_timer(None)
@@ -768,7 +812,7 @@ def build_pomodoro(page: ft.Page):
         ft.Column([
             ft.Text("Timer Configuration Engine", size=16, weight=ft.FontWeight.W_600, color="#00FFFF"),
             task_dropdown,
-            sound_row,                          # ← ambient sound toggle row
+            sound_row,
             ft.Container(
                 content=ft.Row([focus_input, short_break_input, long_break_input, interval_input], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
                 padding=ft.Padding(top=5, right=0, bottom=5, left=0)

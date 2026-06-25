@@ -1,4 +1,5 @@
 import flet as ft
+import asyncio
 import sys
 import os
 
@@ -8,6 +9,7 @@ if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
 from modules.pomodoro.pomodoro import build_pomodoro
+import modules.pomodoro.pomodoro as pomodoro_module
 from modules.tasks import build_tasks
 from modules.expenses import build_expenses
 from modules.expenses.engine import load_expense_data
@@ -48,8 +50,6 @@ def main(page: ft.Page):
     content_area = ft.Container(expand=True, padding=15)
 
     # ── Glass sidebar colour ──────────────────────────────────────────────────
-    # Resolved once at startup; both the NavigationRail AND the sidebar
-    # Container use the same value so there is no colour seam between them.
     _SIDEBAR_FALLBACK = "rgba(17,21,29,0.90)"
     try:
         _glass      = get_active_glass_theme()
@@ -60,8 +60,6 @@ def main(page: ft.Page):
         _sidebar_bg = _SIDEBAR_FALLBACK
 
     # ── Pomodoro toggle ref ───────────────────────────────────────────────────
-    # build_pomodoro returns (layout, toggle_timer_fn).  We keep the fn here
-    # so the keyboard handler can call it when Space is pressed on tab 1.
     _pomodoro_toggle = {"fn": None}
 
     # ── Navigation core ───────────────────────────────────────────────────────
@@ -69,14 +67,24 @@ def main(page: ft.Page):
         """Build and display the page for *index*; update the rail highlight."""
         try:
             if index == 0:
-                content_area.content = build_dashboard(page)
+                # Build the dashboard layout but do NOT let it self-paint yet.
+                layout = build_dashboard(page)
+                content_area.content = layout
+                # Mount into the live page tree first.
+                content_area.update()
+                # Now that widgets are mounted, trigger the first paint.
+                if hasattr(layout, "refresh"):
+                    layout.refresh()
                 _pomodoro_toggle["fn"] = None
+                # Return early — content_area is already updated above.
+                return
+
             elif index == 1:
                 layout, toggle_fn = build_pomodoro(page)
                 content_area.content = layout
                 _pomodoro_toggle["fn"] = toggle_fn
             elif index == 2:
-                content_area.content = build_tasks(page)
+                content_area.content = build_tasks(page, on_focus_task=switch_to_pomodoro_with_task)
                 _pomodoro_toggle["fn"] = None
             elif index == 3:
                 content_area.content = build_expenses(page)
@@ -95,7 +103,9 @@ def main(page: ft.Page):
                     content_area.content = ft.Text(
                         err, color="#FF4B4B", size=11, selectable=True
                     )
+
             content_area.update()
+
         except Exception as exc:
             # Surface any build error as a visible message instead of silent fail
             content_area.content = ft.Text(
@@ -104,21 +114,64 @@ def main(page: ft.Page):
             )
             content_area.update()
 
+    # ── Task → Pomodoro deep link (P12-T1) ──────────────────────────────────
+    def switch_to_pomodoro_with_task(task_title: str):
+        """
+        Called by the "Focus on this" button on a task tile (modules/tasks.py).
+        Stashes *task_title* on the Pomodoro module's session dict so that the
+        next build_pomodoro() call pre-selects it in task_dropdown, then
+        switches to the Pomodoro tab via the same _navigate_to() path the
+        sidebar rail itself uses — this keeps the spacebar-toggle wiring
+        (_pomodoro_toggle["fn"]) and the existing error handling intact
+        instead of duplicating that logic here.
+
+        Reads/writes pomodoro_module._global_timer_session as a module
+        attribute (not a name imported directly from the module) so this
+        always sees the live dict even if build_pomodoro() hasn't run yet
+        this session — `from modules.pomodoro.pomodoro import
+        _global_timer_session` would instead capture whatever value that
+        name held at import time (typically None, before the first
+        build_pomodoro() call), and keep pointing at that stale value
+        forever, even after build_pomodoro() replaces it with the real dict.
+        """
+        if pomodoro_module._global_timer_session is None:
+            # Mirrors the default shape build_pomodoro() itself creates on
+            # first run — needed here only so there's a dict to stash the
+            # pending selection into before build_pomodoro() has run once.
+            pomodoro_module._global_timer_session = {
+                "timer_running": False,
+                "current_mode": "Focus",
+                "total_focus_remaining": 25 * 60,
+                "current_segment_elapsed": 0,
+                "break_time_remaining": 0,
+                "completed_sprints": 0,
+                "active_view": "Bars",
+                "active_theme": "Glass Cyan",
+                "selected_task": "General Study",
+                "live_timer_text": None,
+                "live_progress_bar": None,
+                "sound_enabled": False,
+                "sound_src": "None",
+                "pending_task_selection": None,
+            }
+        pomodoro_module._global_timer_session["pending_task_selection"] = task_title
+
+        sidebar_rail.selected_index = 1
+        sidebar_rail.update()
+        _navigate_to(1)
+
     # ── Navigation handler (rail on_change) ───────────────────────────────────
     def nav_change(e):
         _navigate_to(e.control.selected_index)
 
     # ── Keyboard shortcuts ────────────────────────────────────────────────────
-    # Ctrl+1…6  → switch to tab 0…5
-    # Ctrl+N    → jump to Tasks (2); if already there, jump to Expenses (3)
-    # Space     → toggle Pomodoro timer (only when Pomodoro tab is active)
     def on_keyboard_event(e: ft.KeyboardEvent):
         key   = e.key
         ctrl  = e.ctrl
         shift = e.shift
         alt   = e.alt
 
-        # Ignore modified Space presses (Ctrl+Space etc.) — only bare Space.
+        # Ignore modified Space presses — only bare Space.
         if key == " " and not ctrl and not shift and not alt:
             fn = _pomodoro_toggle.get("fn")
             if fn is not None:
@@ -193,7 +246,7 @@ def main(page: ft.Page):
 
         if any(needle in title.lower() for title in task_titles):
             sidebar_rail.selected_index = 2
-            content_area.content = build_tasks(page, initial_query=query)
+            content_area.content = build_tasks(page, initial_query=query, on_focus_task=switch_to_pomodoro_with_task)
             content_area.update()
             page.update()
             return
@@ -232,15 +285,12 @@ def main(page: ft.Page):
     )
 
     # ── Navigation rail ───────────────────────────────────────────────────────
-    # bgcolor matches _sidebar_bg exactly so every destination — including
-    # Settings (index 5) — renders on the same background colour.
     sidebar_rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
         min_width=100,
-        bgcolor=_sidebar_bg,  # ← same value as sidebar_column below
-        height=420,           # fixed height: NavigationRail needs a bounded height,
-                              # it can't be sized by an expanding parent Column alone
+        bgcolor=_sidebar_bg,
+        height=420,
         destinations=[
             ft.NavigationRailDestination(
                 icon=ft.Icons.DASHBOARD_ROUNDED,
@@ -271,15 +321,13 @@ def main(page: ft.Page):
     )
 
     # ── Sidebar container ─────────────────────────────────────────────────────
-    # bgcolor is intentionally the same as sidebar_rail so there is no
-    # visible colour gap around the search box or pin button.
     sidebar_column = ft.Container(
         content=ft.Column(
             [sidebar_search, sidebar_rail, ft.Container(expand=True), sidebar_footer],
             spacing=0,
             expand=True,
         ),
-        bgcolor=_sidebar_bg,  # ← unified with the rail colour
+        bgcolor=_sidebar_bg,
         width=100,
     )
 
@@ -292,7 +340,7 @@ def main(page: ft.Page):
             ],
             expand=True,
         ),
-        bgcolor=None,   # wallpaper DecorationImage is the visual background
+        bgcolor=None,
         expand=True,
     )
 
@@ -303,6 +351,57 @@ def main(page: ft.Page):
     # tree must be mounted first or updates are silently dropped.
     page.add(main_layout_frame)
 
+    # ── Floating mini-timer overlay (P12-T3) ─────────────────────────────────
+    # Build the pill widget. bottom/right positioning only works inside a
+    # ft.Stack, so we wrap the pill in an expand=True Stack and append that
+    # to page.overlay AFTER all other overlay items (audio, pickers, etc.)
+    # are added by the modules themselves — this keeps them unaffected.
+    mini_timer_text = ft.Text(
+        "",
+        size=13,
+        color="#00FFFF",
+        weight=ft.FontWeight.W_600,
+        font_family="Courier New",
+    )
+    mini_timer_pill = ft.Container(
+        content=mini_timer_text,
+        bgcolor="rgba(17,21,29,0.88)",
+        border_radius=20,
+        padding=ft.Padding(16, 8, 16, 8),
+        border=ft.Border(
+            ft.BorderSide(1, "rgba(0,255,255,0.3)"),
+            ft.BorderSide(1, "rgba(0,255,255,0.3)"),
+            ft.BorderSide(1, "rgba(0,255,255,0.3)"),
+            ft.BorderSide(1, "rgba(0,255,255,0.3)"),
+        ),
+        visible=False,
+        bottom=16,
+        right=16,
+    )
+    mini_timer_stack = ft.Stack(
+        [mini_timer_pill],
+        expand=True,
+    )
+    page.overlay.append(mini_timer_stack)
+
+    def refresh_mini_timer():
+        from modules.pomodoro.pomodoro import get_mini_timer_text
+        text, visible = get_mini_timer_text()
+        mini_timer_text.value = text
+        mini_timer_pill.visible = visible
+        try:
+            mini_timer_pill.update()
+        except Exception:
+            pass
+
+    async def _poll_mini_timer():
+        while True:
+            await asyncio.sleep(1)
+            refresh_mini_timer()
+
+    page.run_task(_poll_mini_timer)
+    # ── End mini-timer overlay ────────────────────────────────────────────────
+
     # ── Post-mount startup ────────────────────────────────────────────────────
     def _launch():
         """
@@ -312,7 +411,8 @@ def main(page: ft.Page):
         Everything that touches content_area lives here so it only runs
         AFTER page.add() has mounted the widget tree.
         """
-        # Load the dashboard into the now-mounted content_area
+        # Load the dashboard into the now-mounted content_area.
+        # _navigate_to(0) handles: build → mount → paint, in that order.
         _navigate_to(0)
 
         # Restore a previously-chosen wallpaper, if one was saved

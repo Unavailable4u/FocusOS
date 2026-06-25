@@ -2,8 +2,8 @@ import flet as ft
 from datetime import datetime, timedelta
 import data_manager as dm
 import asyncio
-from .engine import parse_aggregated_metrics, get_date_range_display_string, get_focus_streak, calculate_focus_streak, get_weekly_summary
-from .timelines import build_chrono_timeline_graph, build_expense_trend_graph, build_monthly_horizontal_focus_graph
+from .engine import parse_aggregated_metrics, get_date_range_display_string, get_focus_streak, calculate_focus_streak, get_weekly_summary, evaluate_and_unlock_badges, get_focus_vs_spending_by_day
+from .timelines import build_chrono_timeline_graph, build_expense_trend_graph, build_monthly_horizontal_focus_graph, build_focus_vs_spending_chart
 from .charts import create_stat_card, build_proportional_share_panel, build_upcoming_goal_pie_panel
 from .streaks import build_streak_heatmap_panel
 from ..quotes import get_quote_for_today
@@ -12,15 +12,13 @@ _DASHBOARD_FALLBACK_TITLE = "Comprehensive Performance Dashboard Engine"
 
 
 def _get_dashboard_title() -> str:
-    """Returns a personalized greeting using settings.profile_name when set,
-    otherwise falls back to the static dashboard title."""
     name = dm.get_settings().get("profile_name", "").strip()
     return f"Welcome back, {name}" if name else _DASHBOARD_FALLBACK_TITLE
 
 
 def build_dashboard(page: ft.Page):
     current_interval = "Daily"
-    time_offset = 0  # 0 = today, -1 = yesterday, etc.
+    time_offset = 0
     currency_symbol = dm.get_currency_symbol()
 
     dashboard_title_lbl    = ft.Text(_get_dashboard_title(), size=22, weight=ft.FontWeight.W_600, color="#45A29E")
@@ -32,34 +30,91 @@ def build_dashboard(page: ft.Page):
         spacing=3,
         visible=False,
     )
-    quote_lbl = ft.Text(
-        "",
-        size=12,
-        italic=True,
-        color="grey500",
-    )
+    quote_lbl = ft.Text("", size=12, italic=True, color="grey500")
+
     card_focus    = ft.Container(expand=True)
     card_tasks    = ft.Container(expand=True)
     card_expenses = ft.Container(expand=True)
-    card_streak   = ft.Container(expand=True)   # 4th stat card
+    card_streak   = ft.Container(expand=True)
 
     chrono_bar_graph         = ft.Container(expand=True)
     expense_bar_graph        = ft.Container(expand=True)
     monthly_horizontal_graph = ft.Container(expand=True)
-    streak_heatmap_panel     = ft.Container(expand=True)   # P5-T3 streak/goal-completion calendar
+    streak_heatmap_panel     = ft.Container(expand=True)
+    badge_shelf_panel        = ft.Container(expand=True)
+    focus_spend_chart        = ft.Container(expand=True)
 
     task_distribution_panel    = ft.Container(expand=True)
     expense_distribution_panel = ft.Container(expand=True)
     goal_pie_panel             = build_upcoming_goal_pie_panel()
+
+    # ── Badge notification label ──────────────────────────────────────────────
+    badge_notification_lbl = ft.Text("", size=12, color="#FFD700", italic=True)
+
+    def _show_badge_notification(badge_id: str):
+        defn  = dm.BADGE_DEFINITIONS.get(badge_id, {})
+        label = defn.get("label", badge_id)
+        badge_notification_lbl.value = f"🏅 New badge: {label}!"
+        try:
+            badge_notification_lbl.update()
+        except Exception:
+            pass
+
+        async def _clear_after_delay():
+            await asyncio.sleep(8)
+            badge_notification_lbl.value = ""
+            try:
+                badge_notification_lbl.update()
+            except Exception:
+                pass
+
+        try:
+            page.run_task(_clear_after_delay)
+        except Exception:
+            pass
+
+    def _build_badge_shelf() -> ft.Container:
+        unlocked = dm.get_unlocked_badges()
+        if not unlocked:
+            return ft.Container(
+                content=ft.Text("No badges yet — keep going!", size=12,
+                                color="grey600", italic=True),
+                padding=ft.Padding(0, 4, 0, 4),
+            )
+        chips = []
+        for bid in unlocked:
+            defn = dm.BADGE_DEFINITIONS.get(bid, {})
+            chips.append(ft.Container(
+                content=ft.Row([
+                    ft.Text(defn.get("icon", "🏅"), size=18),
+                    ft.Text(defn.get("label", bid), size=12,
+                            color="#E0E0E0", weight=ft.FontWeight.W_500),
+                ], spacing=6),
+                bgcolor="rgba(255,255,255,0.06)",
+                border_radius=20,
+                padding=ft.Padding(10, 5, 12, 5),
+                tooltip=defn.get("desc", ""),
+            ))
+        return ft.Container(
+            content=ft.Column([
+                ft.Text("Achievements", size=13, color="#8E9AA6",
+                        weight=ft.FontWeight.W_600),
+                ft.Row(chips, spacing=8, wrap=True),
+            ], spacing=8),
+            bgcolor="#11151D", border_radius=10,
+            padding=ft.Padding(14, 10, 14, 10),
+        )
 
     def repaint_dashboard_ui():
         nonlocal time_offset
         m           = parse_aggregated_metrics(current_interval, time_offset)
         raw_db_data = dm.load_data()
 
-        # Greeting can change if the user updates their display name in
-        # Settings, so refresh it on every repaint rather than only at
-        # build time.
+        # ── Badge evaluation ──────────────────────────────────────────────────
+        newly_unlocked = evaluate_and_unlock_badges()
+        if newly_unlocked:
+            _show_badge_notification(newly_unlocked[0])
+
         dashboard_title_lbl.value = _get_dashboard_title()
         try: dashboard_title_lbl.update()
         except Exception: pass
@@ -94,7 +149,6 @@ def build_dashboard(page: ft.Page):
             f"{currency_symbol}{m['total_expense']:,.2f}",
             "Tracked financial outbounds", "#FF9100")
 
-        # ── Streak card — always reflects current running streak ─────────────
         streak = get_focus_streak()
         if streak == 0:
             streak_value    = "0 days"
@@ -110,7 +164,6 @@ def build_dashboard(page: ft.Page):
             streak_value,
             streak_subtitle, "#FFEA00")
 
-        # ── Header badge — goal-driven streak (P5-T2's calculate_focus_streak) ─
         goal_streak = calculate_focus_streak()
         if goal_streak > 0:
             streak_badge_text.value = f"{goal_streak}-day streak"
@@ -120,7 +173,6 @@ def build_dashboard(page: ft.Page):
         try: streak_badge.update()
         except Exception: pass
 
-        # ── Motivational quote — tier driven by running streak ────────────────
         quote_lbl.value = f'"{get_quote_for_today(streak)}"'
         try: quote_lbl.update()
         except Exception: pass
@@ -134,9 +186,6 @@ def build_dashboard(page: ft.Page):
             "Capital Resource Cost Proportional Allocation",
             m["category_expense_breakdown"], is_currency=True, currency_symbol=currency_symbol)
 
-        # Rebuild (not just refresh) the goal pie panel so it reflects today's
-        # latest focus minutes / goal every repaint, instead of staying frozen
-        # at whatever the data looked like when the dashboard first loaded.
         goal_pie_panel.content = build_upcoming_goal_pie_panel().content
 
         expense_bar_graph.content = build_expense_trend_graph(
@@ -145,19 +194,58 @@ def build_dashboard(page: ft.Page):
             raw_db_data.get("hourly_task_distribution", {}))
         streak_heatmap_panel.content = build_streak_heatmap_panel()
 
+        # ── Badge shelf ───────────────────────────────────────────────────────
+        badge_shelf_panel.content = _build_badge_shelf()
+
+        # ── Focus vs. Spending chart ──────────────────────────────────────────
+        focus_spend_chart.content = build_focus_vs_spending_chart(
+            num_days=30, currency_symbol=currency_symbol)
+
         try:
-            card_focus.update(); card_tasks.update()
-            card_expenses.update(); card_streak.update()
-            chrono_bar_graph.update(); expense_bar_graph.update()
+            card_focus.update()
+            card_tasks.update()
+            card_expenses.update()
+            card_streak.update()
+            chrono_bar_graph.update()
+            expense_bar_graph.update()
             monthly_horizontal_graph.update()
             streak_heatmap_panel.update()
-            task_distribution_panel.update(); expense_distribution_panel.update()
+            badge_shelf_panel.update()
+            task_distribution_panel.update()
+            expense_distribution_panel.update()
             goal_pie_panel.update()
-        except Exception: pass
+            focus_spend_chart.update()
+            dashboard_layout_view.update()
+        except Exception:
+            pass
+
+        _scroll_monthly_graph_to_end()
+
+    def _scroll_monthly_graph_to_end():
+        async def _do_scroll():
+            await asyncio.sleep(0.15)
+            try:
+                if (monthly_horizontal_graph.content and
+                        hasattr(monthly_horizontal_graph.content, "controls") and
+                        len(monthly_horizontal_graph.content.controls) >= 3):
+                    inner_scroll_wrapper = monthly_horizontal_graph.content.controls[2]
+                    if hasattr(inner_scroll_wrapper, "content") and inner_scroll_wrapper.content:
+                        await inner_scroll_wrapper.content.scroll_to(offset=-1, duration=100)
+            except Exception:
+                pass
+
+        try:
+            asyncio.run_coroutine_threadsafe(_do_scroll(), page.loop)
+        except Exception:
+            pass
 
     def interval_changed(e):
         nonlocal current_interval, time_offset
-        current_interval = "Daily" if e.control.selected_index == 0 else ("Weekly" if e.control.selected_index == 1 else "Monthly")
+        current_interval = (
+            "Daily"   if e.control.selected_index == 0 else
+            "Weekly"  if e.control.selected_index == 1 else
+            "Monthly"
+        )
         time_offset = 0
         repaint_dashboard_ui()
 
@@ -212,15 +300,11 @@ def build_dashboard(page: ft.Page):
         page.update()
 
     # ── Weekly Summary Banner ─────────────────────────────────────────────────
-    # Show when: it's Monday  OR  the banner has never been dismissed / was last
-    # dismissed on a different Monday than today's.
     def _this_monday() -> str:
         today = datetime.now().date()
         return (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
 
     def _should_show_banner() -> bool:
-        # Stored under settings (not the data root) so it isn't dropped by
-        # initialize_db()'s back-fill logic or a data restore.
         last_dismissed = dm.get_settings().get("last_summary_dismissed", "")
         return last_dismissed != _this_monday()
 
@@ -243,7 +327,8 @@ def build_dashboard(page: ft.Page):
         h, m = divmod(int(s["total_focus_mins"]), 60)
         focus_str   = f"{h}h {m}m" if h else f"{m}m"
         top_str     = f"  ·  Top task: {s['top_task']}" if s["top_task"] else ""
-        expense_str = f"{currency_symbol}{s['this_week_expense']:,.0f}" if s["this_week_expense"] else f"{currency_symbol}0"
+        expense_str = (f"{currency_symbol}{s['this_week_expense']:,.0f}"
+                       if s["this_week_expense"] else f"{currency_symbol}0")
         return (
             f"📊  Weekly wrap  ({s['week_start']} → {s['week_end']})   "
             f"Focus: {focus_str}{top_str}   "
@@ -284,6 +369,7 @@ def build_dashboard(page: ft.Page):
                 dashboard_title_lbl,
                 ft.Row([dashboard_subtitle_lbl, streak_badge], spacing=10),
                 quote_lbl,
+                badge_notification_lbl,
             ], spacing=2),
             ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -293,10 +379,11 @@ def build_dashboard(page: ft.Page):
 
     dashboard_scroll_body = ft.Column([
         ft.Container(height=10),
-        # All 4 stat cards in one row
         ft.Row([card_focus, card_tasks, card_expenses, card_streak], spacing=12),
         ft.Container(height=5),
         streak_heatmap_panel,
+        ft.Container(height=5),
+        badge_shelf_panel,
         ft.Container(height=5),
         monthly_horizontal_graph,
         ft.Container(height=5),
@@ -306,33 +393,16 @@ def build_dashboard(page: ft.Page):
         ft.Container(height=5),
         expense_bar_graph,
         ft.Container(height=5),
+        focus_spend_chart,
+        ft.Container(height=5),
     ], expand=True, scroll=ft.ScrollMode.ALWAYS)
 
-    # weekly_banner sits at the top of the layout column; its visible property
-    # controls whether it is shown. This avoids page.open()/page.close() which
-    # are not available in Flet 0.85.x.
     dashboard_layout_view = ft.Column(
         [weekly_banner, header_bar, dashboard_scroll_body],
         expand=True,
         spacing=0,
     )
 
-    async def snap_inner_matrix_to_end_async():
-        await asyncio.sleep(0.15)
-        try:
-            if monthly_horizontal_graph.content and len(monthly_horizontal_graph.content.controls) >= 3:
-                inner_scroll_wrapper = monthly_horizontal_graph.content.controls[2]
-                if hasattr(inner_scroll_wrapper, "content") and inner_scroll_wrapper.content:
-                    await inner_scroll_wrapper.content.scroll_to(offset=-1, duration=100)
-        except Exception:
-            pass
-
-    def schedule_native_callback():
-        asyncio.run_coroutine_threadsafe(snap_inner_matrix_to_end_async(), page.loop)
-
-    import threading
-    threading.Thread(target=schedule_native_callback, daemon=True).start()
-
-    repaint_dashboard_ui()
+    dashboard_layout_view.refresh = repaint_dashboard_ui
 
     return dashboard_layout_view
