@@ -168,63 +168,83 @@ def get_focus_by_weekday() -> dict:
 
 def get_weekly_summary() -> dict:
     """
-    Returns aggregated stats for the last 7 full days (yesterday back to -6).
+    Returns aggregated stats for the current 7-day window plus a
+    week-over-week expense comparison against the previous 7-day window.
+
+    Delegates all heavy lifting to parse_aggregated_metrics() so there is
+    no duplicated aggregation logic — this function is purely a thin adapter
+    that calls it twice (time_offset=0 for this week, time_offset=-1 for
+    last week) and shapes the results into a single summary dict.
 
     Keys returned
     -------------
-    total_focus_mins  : int   – sum of all focus minutes across the 7 days
-    top_task          : str   – task name with the most minutes (or "" if none)
-    total_expense     : float – sum of all expenses across the 7 days
-    completed_tasks   : int   – tasks marked completed (global count, same as
-                                dashboard — tasks have no date field to filter by)
-    week_start        : str   – oldest date in range, "YYYY-MM-DD"
-    week_end          : str   – newest date in range, "YYYY-MM-DD"
+    total_focus_mins     : int   – sum of all focus minutes this week
+    total_focus_hours    : float – total_focus_mins / 60, rounded to 1 dp
+    top_task             : str   – task name with the most minutes ("" if none)
+    top_task_mins        : int   – minutes logged on top_task (0 if none)
+    completed_tasks      : int   – tasks marked completed (global — no date stamp)
+    pending_tasks        : int   – tasks not yet completed (global)
+    this_week_expense    : float – total spend in the current 7-day window
+    last_week_expense    : float – total spend in the previous 7-day window
+    expense_change_pct   : float – % change vs last week:
+                                       None  → last week had no spend (no base)
+                                       +50.0 → spent 50 % more than last week
+                                       -20.0 → spent 20 % less than last week
+                                         0.0 → identical spend both weeks
+    week_start           : str   – oldest date in this week's range, "YYYY-MM-DD"
+    week_end             : str   – newest date in this week's range, "YYYY-MM-DD"
     """
-    data  = dm.load_data()
-    today = datetime.now().date()
+    # ── This week (offset=0: today back to today-6) ───────────────────────────
+    this_week = parse_aggregated_metrics("Weekly", time_offset=0)
 
-    # Build the 7-day window: today-6 … today-0 (inclusive)
-    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
-    date_set = set(dates)
+    total_focus_mins = int(this_week["total_focus_mins"])
+    total_focus_hours = round(total_focus_mins / 60, 1)
 
-    # ── Focus minutes ──────────────────────────────────────────────────────────
-    total_focus_mins = 0
-    task_totals: dict[str, int] = {}
-    distribution = data.get("hourly_task_distribution", {})
+    task_breakdown: dict[str, int] = this_week.get("task_time_breakdown", {})
+    if task_breakdown:
+        top_task      = max(task_breakdown, key=task_breakdown.get)
+        top_task_mins = int(task_breakdown[top_task])
+    else:
+        top_task      = ""
+        top_task_mins = 0
 
-    for date_str, hours_dict in distribution.items():
-        if date_str not in date_set or not isinstance(hours_dict, dict):
-            continue
-        for tasks_dict in hours_dict.values():
-            if not isinstance(tasks_dict, dict):
-                continue
-            for task, mins in tasks_dict.items():
-                if isinstance(mins, (int, float)) and mins > 0:
-                    total_focus_mins        += mins
-                    task_totals[task]        = task_totals.get(task, 0) + mins
+    this_week_expense = float(this_week["total_expense"])
+    completed_tasks   = int(this_week["completed_tasks"])
+    pending_tasks     = int(this_week["pending_tasks"])
 
-    top_task = max(task_totals, key=task_totals.get) if task_totals else ""
+    # Derive the human-readable date range from the target_dates list that
+    # parse_aggregated_metrics already computed (always 7 items, oldest first).
+    target_dates = this_week.get("target_dates", [])
+    week_start   = target_dates[0]  if target_dates else ""
+    week_end     = target_dates[-1] if target_dates else ""
 
-    # ── Expenses ───────────────────────────────────────────────────────────────
-    total_expense = 0.0
-    for exp in data.get("expenses", []):
-        if str(exp.get("date", "")).strip() in date_set:
-            try:
-                total_expense += float(exp.get("amount", 0.0))
-            except (ValueError, TypeError):
-                pass
+    # ── Last week (offset=-1: today-7 back to today-13) ──────────────────────
+    last_week         = parse_aggregated_metrics("Weekly", time_offset=-1)
+    last_week_expense = float(last_week["total_expense"])
 
-    # ── Task counts (global — tasks carry no date stamp) ──────────────────────
-    tasks           = data.get("tasks", [])
-    completed_tasks = len([t for t in tasks if t.get("completed")])
+    # ── Week-over-week expense change ─────────────────────────────────────────
+    # None signals "no base to compare against" (avoids a /0 and is more
+    # honest than 0 % or +∞).  When last week had spend we return a signed
+    # percentage rounded to one decimal place.
+    if last_week_expense == 0.0:
+        expense_change_pct: float | None = None
+    else:
+        expense_change_pct = round(
+            (this_week_expense - last_week_expense) / last_week_expense * 100, 1
+        )
 
     return {
-        "total_focus_mins": total_focus_mins,
-        "top_task":         top_task,
-        "total_expense":    total_expense,
-        "completed_tasks":  completed_tasks,
-        "week_start":       dates[0],
-        "week_end":         dates[-1],
+        "total_focus_mins":   total_focus_mins,
+        "total_focus_hours":  total_focus_hours,
+        "top_task":           top_task,
+        "top_task_mins":      top_task_mins,
+        "completed_tasks":    completed_tasks,
+        "pending_tasks":      pending_tasks,
+        "this_week_expense":  this_week_expense,
+        "last_week_expense":  last_week_expense,
+        "expense_change_pct": expense_change_pct,
+        "week_start":         week_start,
+        "week_end":           week_end,
     }
 
 

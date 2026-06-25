@@ -677,9 +677,9 @@ def build_expenses(page: ft.Page, initial_query: str = None):
         label="Add New...",
         label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=160)
     manage_cat_dropdown = ft.Dropdown(
-        label="Category",
-        label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=140,
-        on_change=manage_cat_dropdown_changed)
+    label="Category",
+    label_style=ft.TextStyle(color="#45A29E"), border_color="#243142", width=140)
+    manage_cat_dropdown.on_change = manage_cat_dropdown_changed
 
     # Inline per-category budget field — sits next to manage_cat_dropdown and
     # always reflects/edits the budget for whichever category is selected

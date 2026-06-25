@@ -32,7 +32,12 @@ def _make_swatch_row(
                 height=24,
                 border_radius=4,
                 bgcolor=color,
-                border=ft.Border(ft.BorderSide(2, "white" if is_active else "transparent"), ft.BorderSide(2, "white" if is_active else "transparent"), ft.BorderSide(2, "white" if is_active else "transparent"), ft.BorderSide(2, "white" if is_active else "transparent")),
+                border=ft.Border(
+                    ft.BorderSide(2, "white" if is_active else "transparent"),
+                    ft.BorderSide(2, "white" if is_active else "transparent"),
+                    ft.BorderSide(2, "white" if is_active else "transparent"),
+                    ft.BorderSide(2, "white" if is_active else "transparent"),
+                ),
                 tooltip=color,
                 on_click=lambda e, c=color: _swatch_clicked(e, c, on_pick, hex_field_ref),
             )
@@ -56,9 +61,6 @@ def _make_color_row(
     name_key: str,    # the name to pass to on_save
     page: ft.Page,
 ) -> ft.Container:
-    """
-    One row: colored swatch preview  ·  label  ·  12 swatches  ·  hex TextField
-    """
     hex_ref = ft.Ref[ft.TextField]()
 
     preview = ft.Container(
@@ -116,7 +118,7 @@ def _make_color_row(
 # ── Color-overrides section builder ──────────────────────────────────────────
 
 def _build_color_overrides_section(page: ft.Page) -> ft.Container:
-    data = dm.load_data()
+    data          = dm.load_data()
     task_titles   = [t["title"] for t in data.get("tasks", [])]
     categories    = data.get("categories", ["Study", "Food", "Transport", "Other"])
     task_ov       = dm.get_task_color_overrides()
@@ -178,15 +180,9 @@ def _build_color_overrides_section(page: ft.Page) -> ft.Container:
 # ── Glass theme section ───────────────────────────────────────────────────────
 
 def _build_glass_theme_section(page: ft.Page) -> ft.Container:
-    """
-    Dropdown to pick the active glass theme + slider to set card opacity.
-    Writes ``glass_theme`` and ``glass_opacity`` into settings.
-    """
     settings        = dm.get_settings()
     current_theme   = settings.get("glass_theme",   list(GLASS_THEMES.keys())[0])
     current_opacity = float(settings.get("glass_opacity", DEFAULT_OPACITY))
-
-    # ── Preview swatch ────────────────────────────────────────────────────────
 
     def _preview_bgcolor(theme_name: str, opacity: float) -> str:
         from .glass_theme import _set_alpha
@@ -199,7 +195,12 @@ def _build_glass_theme_section(page: ft.Page) -> ft.Container:
         border_radius=8,
         bgcolor=_preview_bgcolor(current_theme, current_opacity),
         blur=8,
-        border=ft.Border(ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")), ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")), ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")), ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)"))),
+        border=ft.Border(
+            ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")),
+            ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")),
+            ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")),
+            ft.BorderSide(1, GLASS_THEMES.get(current_theme, {}).get("border", "rgba(255,255,255,0.2)")),
+        ),
         tooltip="Live preview",
     )
 
@@ -209,18 +210,21 @@ def _build_glass_theme_section(page: ft.Page) -> ft.Container:
         color="grey400",
     )
 
-    # mutable state to keep dropdown and slider in sync
     _state = {"theme": current_theme, "opacity": current_opacity}
 
     def _refresh_preview():
         preview_box.bgcolor = _preview_bgcolor(_state["theme"], _state["opacity"])
         _b = GLASS_THEMES.get(_state["theme"], {}).get("border", "rgba(255,255,255,0.2)")
-        preview_box.border  = ft.Border(ft.BorderSide(1, _b), ft.BorderSide(1, _b), ft.BorderSide(1, _b), ft.BorderSide(1, _b))
+        preview_box.border  = ft.Border(
+            ft.BorderSide(1, _b), ft.BorderSide(1, _b),
+            ft.BorderSide(1, _b), ft.BorderSide(1, _b),
+        )
         opacity_label.value = f"Opacity: {_state['opacity']:.0%}"
-        preview_box.update()
-        opacity_label.update()
-
-    # ── Dropdown ──────────────────────────────────────────────────────────────
+        try:
+            preview_box.update()
+            opacity_label.update()
+        except Exception:
+            pass
 
     def on_theme_change(e):
         _state["theme"] = e.control.value
@@ -234,8 +238,6 @@ def _build_glass_theme_section(page: ft.Page) -> ft.Container:
         options=[ft.dropdown.Option(k) for k in GLASS_THEMES.keys()],
     )
     theme_dropdown.on_change = on_theme_change
-
-    # ── Opacity slider ────────────────────────────────────────────────────────
 
     def on_opacity_change(e):
         _state["opacity"] = round(float(e.control.value), 2)
@@ -262,8 +264,11 @@ def _build_glass_theme_section(page: ft.Page) -> ft.Container:
                     size=13,
                     color="grey600",
                 ),
-                ft.Row([theme_dropdown, preview_box], spacing=16,
-                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row(
+                    [theme_dropdown, preview_box],
+                    spacing=16,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
                 ft.Row(
                     [
                         ft.Text("Opacity", size=13, width=60),
@@ -285,40 +290,18 @@ def _build_glass_theme_section(page: ft.Page) -> ft.Container:
 # ── Background / Wallpaper section ───────────────────────────────────────────
 
 def _build_wallpaper_section(page: ft.Page) -> ft.Container:
-    """
-    Renders a wallpaper card with two ways to set a background:
-
-    1. Bundled presets — 4 clickable thumbnails (forest, mountains, night_city,
-       ocean) sourced from assets/wallpapers/.  The active preset gets a white
-       border ring.  If a file is missing at runtime the tile shows a labelled
-       colour swatch instead so the UI never breaks.
-
-    2. Custom upload — "Browse…" button that opens an image picker, copies the
-       chosen file into assets/wallpapers/, persists the path, and applies it
-       live via glass_theme.update_background_wallpaper().
-
-    A "Reset to Default" text-button (hidden when no wallpaper is set) clears
-    the path and restores the plain bgcolor.
-
-    Note on night_city.avif: AVIF decoding works on modern Linux/macOS/Win11.
-    If you see a blank tile on an older machine, convert it to night_city.jpg.
-    """
     import os
     import shutil
     from .glass_theme import update_background_wallpaper
 
     WALLPAPER_DIR = os.path.join("assets", "wallpapers")
 
-    # ── Bundled preset definitions ─────────────────────────────────────────────
-    # (label, filename, fallback_color)
     PRESETS: list[tuple[str, str, str]] = [
-        ("Forest",     "forest.jpg",      "#1B3A2D"),
+        ("Forest",     "forest.jpg",     "#1B3A2D"),
         ("Mountains",  "mountains.jpg",  "#2C3E50"),
-        ("Night City", "night_city.jpg",  "#0D0D2B"),
-        ("Ocean",      "ocean.jpg",       "#0A3560"),
+        ("Night City", "night_city.jpg", "#0D0D2B"),
+        ("Ocean",      "ocean.jpg",      "#0A3560"),
     ]
-
-    # ── Shared state ──────────────────────────────────────────────────────────
 
     settings     = dm.get_settings()
     current_path = settings.get("background_image_path", "")
@@ -338,13 +321,15 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
         visible=bool(current_path),
     )
 
-    # Refs to each preset tile Container so we can update their borders
     preset_tile_refs: list[ft.Ref] = [ft.Ref[ft.Container]() for _ in PRESETS]
 
     def _set_status(msg: str, ok: bool = True) -> None:
         status_text.value = msg
         status_text.color = "green400" if ok else "red400"
-        status_text.update()
+        try:
+            status_text.update()
+        except Exception:
+            pass
 
     def _active_border() -> ft.Border:
         s = ft.BorderSide(2, "white")
@@ -355,15 +340,19 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
         return ft.Border(s, s, s, s)
 
     def _refresh_ui(new_path: str) -> None:
-        """Update label, reset button, and preset tile highlight borders."""
         current_label.value  = os.path.basename(new_path) if new_path else "No wallpaper set"
         current_label.italic = not bool(new_path)
-        current_label.update()
+        try:
+            current_label.update()
+        except Exception:
+            pass
 
         reset_btn.visible = bool(new_path)
-        reset_btn.update()
+        try:
+            reset_btn.update()
+        except Exception:
+            pass
 
-        # Highlight whichever preset tile matches new_path (if any)
         for ref, (_, filename, _) in zip(preset_tile_refs, PRESETS):
             if ref.current is None:
                 continue
@@ -372,20 +361,19 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
                 os.path.normpath(new_path) == os.path.normpath(preset_full)
             )
             ref.current.border = _active_border() if is_active else _inactive_border()
-            ref.current.update()
-
-    # ── Core apply logic (shared by presets and custom upload) ────────────────
+            try:
+                ref.current.update()
+            except Exception:
+                pass
 
     def _apply_path(dest_path: str, label: str) -> None:
         dm.set_background_image_path(dest_path)
         try:
             update_background_wallpaper(dest_path)
         except Exception:
-            pass  # best-effort live update
+            pass
         _refresh_ui(dest_path)
         _set_status(f"Wallpaper set to {label}", ok=True)
-
-    # ── Preset tiles ──────────────────────────────────────────────────────────
 
     def _make_preset_tile(
         label: str,
@@ -400,7 +388,6 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
             os.path.normpath(current_path) == os.path.normpath(preset_path)
         )
 
-        # Inner content: real thumbnail if file exists, coloured swatch otherwise
         if file_exists:
             inner = ft.Image(
                 src=preset_path,
@@ -468,8 +455,6 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
         wrap=True,
     )
 
-    # ── Custom upload ─────────────────────────────────────────────────────────
-
     def _on_image_picked(src_path: str | None) -> None:
         if not src_path:
             return
@@ -492,8 +477,6 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
     def on_browse_click(e) -> None:
         pick_image(page, on_result=_on_image_picked)
 
-    # ── Reset ─────────────────────────────────────────────────────────────────
-
     def on_reset_click(e) -> None:
         dm.clear_background_image_path()
         try:
@@ -505,8 +488,6 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
 
     reset_btn.on_click = on_reset_click
 
-    # ── Layout ────────────────────────────────────────────────────────────────
-
     return ft.Container(
         content=ft.Column(
             [
@@ -516,19 +497,12 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
                     size=13,
                     color="grey600",
                 ),
-                # ── Preset thumbnails ─────────────────────────────────────
-                ft.Text("Presets", size=13, weight=ft.FontWeight.W_500,
-                        color="grey300"),
+                ft.Text("Presets", size=13, weight=ft.FontWeight.W_500, color="grey300"),
                 preset_tiles,
                 ft.Divider(height=1, color="rgba(255,255,255,0.06)"),
-                # ── Custom upload row ─────────────────────────────────────
-                ft.Text("Custom", size=13, weight=ft.FontWeight.W_500,
-                        color="grey300"),
+                ft.Text("Custom", size=13, weight=ft.FontWeight.W_500, color="grey300"),
                 ft.Row(
-                    [
-                        ft.Text("Active:", size=13, color="grey400"),
-                        current_label,
-                    ],
+                    [ft.Text("Active:", size=13, color="grey400"), current_label],
                     spacing=6,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -556,25 +530,19 @@ def _build_wallpaper_section(page: ft.Page) -> ft.Container:
 # ── Backup / Restore section ──────────────────────────────────────────────────
 
 def _build_backup_restore_section(page: ft.Page) -> ft.Container:
-    """
-    Renders a card with two buttons:
-      • Backup Data   → pick_save_path → dm.backup_data(dest)
-      • Restore Data  → pick_open_file → validate → confirm dialog → dm.restore_data(src)
-    A status Text widget surfaces success / error feedback inline.
-    """
-
     status_text = ft.Text("", size=13, color="green400")
 
     def _set_status(msg: str, ok: bool = True) -> None:
         status_text.value = msg
         status_text.color = "green400" if ok else "red400"
-        status_text.update()
-
-    # ── Backup ────────────────────────────────────────────────────────────────
+        try:
+            status_text.update()
+        except Exception:
+            pass
 
     def _on_backup_result(dest_path: str | None) -> None:
         if not dest_path:
-            return  # user cancelled
+            return
         try:
             dm.backup_data(dest_path)
             _set_status(f"Backup saved to {dest_path}", ok=True)
@@ -589,8 +557,6 @@ def _build_backup_restore_section(page: ft.Page) -> ft.Container:
             suggested_name=suggested,
             allowed_extensions=["json"],
         )
-
-    # ── Restore ───────────────────────────────────────────────────────────────
 
     def _do_restore(src_path: str) -> None:
         ok, reason = dm.restore_data(src_path)
@@ -631,13 +597,11 @@ def _build_backup_restore_section(page: ft.Page) -> ft.Container:
 
     def _on_restore_result(src_path: str | None) -> None:
         if not src_path:
-            return  # user cancelled
-
+            return
         ok, reason = dm.validate_backup(src_path)
         if not ok:
             _set_status(f"Invalid backup file: {reason}", ok=False)
             return
-
         _show_confirm_dialog(src_path)
 
     def on_restore_click(e) -> None:
@@ -646,8 +610,6 @@ def _build_backup_restore_section(page: ft.Page) -> ft.Container:
             on_result=_on_restore_result,
             allowed_extensions=["json"],
         )
-
-    # ── Layout ────────────────────────────────────────────────────────────────
 
     return ft.Container(
         content=ft.Column(
@@ -687,7 +649,7 @@ def _build_backup_restore_section(page: ft.Page) -> ft.Container:
 # ── Main entry-point ──────────────────────────────────────────────────────────
 
 def build_settings(page: ft.Page):
-    """Settings view — profile, pomodoro defaults, and color overrides."""
+    """Settings view — profile, pomodoro defaults, color overrides, and more."""
 
     settings = dm.get_settings()
 
@@ -735,7 +697,7 @@ def build_settings(page: ft.Page):
         padding=20,
     )
 
-    # ── Goals: daily focus goal (drives streak calendar, goal pie, streak counter) ──
+    # ── Goals ─────────────────────────────────────────────────────────────────
 
     goals = dm.get_goals()
 
@@ -774,6 +736,8 @@ def build_settings(page: ft.Page):
         border_radius=12,
         padding=20,
     )
+
+    # ── Pomodoro defaults ─────────────────────────────────────────────────────
 
     default_durations = settings.get("default_durations", {})
 
@@ -887,8 +851,13 @@ def build_settings(page: ft.Page):
         alignment=ft.Alignment(0, 0),
     )
 
-    return ft.Column(
-        [
+    # ── FIX: use ListView instead of Column ───────────────────────────────────
+    # ft.Column(expand=True) nested inside a Container inside another Column
+    # causes a silent layout overflow crash in Flet, which is why clicking
+    # Settings appeared to do nothing.  ft.ListView handles unbounded height
+    # gracefully and adds free scrolling for the long settings page.
+    return ft.ListView(
+        controls=[
             header,
             ft.Divider(height=1, color="rgba(255,255,255,0.05)"),
             profile_section,
@@ -902,4 +871,5 @@ def build_settings(page: ft.Page):
         ],
         spacing=20,
         expand=True,
+        padding=ft.Padding(left=0, top=0, right=16, bottom=20),
     )

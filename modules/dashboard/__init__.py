@@ -6,6 +6,7 @@ from .engine import parse_aggregated_metrics, get_date_range_display_string, get
 from .timelines import build_chrono_timeline_graph, build_expense_trend_graph, build_monthly_horizontal_focus_graph
 from .charts import create_stat_card, build_proportional_share_panel, build_upcoming_goal_pie_panel
 from .streaks import build_streak_heatmap_panel
+from ..quotes import get_quote_for_today
 
 _DASHBOARD_FALLBACK_TITLE = "Comprehensive Performance Dashboard Engine"
 
@@ -30,6 +31,12 @@ def build_dashboard(page: ft.Page):
         [streak_badge_icon, streak_badge_text],
         spacing=3,
         visible=False,
+    )
+    quote_lbl = ft.Text(
+        "",
+        size=12,
+        italic=True,
+        color="grey500",
     )
     card_focus    = ft.Container(expand=True)
     card_tasks    = ft.Container(expand=True)
@@ -111,6 +118,11 @@ def build_dashboard(page: ft.Page):
         else:
             streak_badge.visible    = False
         try: streak_badge.update()
+        except Exception: pass
+
+        # ── Motivational quote — tier driven by running streak ────────────────
+        quote_lbl.value = f'"{get_quote_for_today(streak)}"'
+        try: quote_lbl.update()
         except Exception: pass
 
         chrono_bar_graph.content = build_chrono_timeline_graph(
@@ -217,19 +229,21 @@ def build_dashboard(page: ft.Page):
         leading=ft.Icon(ft.Icons.INSIGHTS_ROUNDED, color="#00FFFF", size=32),
         content=ft.Text("", color="white", size=13),
         actions=[
-            ft.TextButton(
-                "Dismiss",
-                style=ft.ButtonStyle(color="#00FFFF"),
+            ft.IconButton(
+                icon=ft.Icons.CLOSE_ROUNDED,
+                icon_color="#00FFFF",
+                icon_size=20,
                 on_click=lambda e: _dismiss_banner(e),
             )
         ],
+        visible=False,
     )
 
     def _build_banner_text(s: dict) -> str:
         h, m = divmod(int(s["total_focus_mins"]), 60)
         focus_str   = f"{h}h {m}m" if h else f"{m}m"
         top_str     = f"  ·  Top task: {s['top_task']}" if s["top_task"] else ""
-        expense_str = f"{currency_symbol}{s['total_expense']:,.0f}" if s["total_expense"] else f"{currency_symbol}0"
+        expense_str = f"{currency_symbol}{s['this_week_expense']:,.0f}" if s["this_week_expense"] else f"{currency_symbol}0"
         return (
             f"📊  Weekly wrap  ({s['week_start']} → {s['week_end']})   "
             f"Focus: {focus_str}{top_str}   "
@@ -239,12 +253,16 @@ def build_dashboard(page: ft.Page):
 
     def _dismiss_banner(e):
         dm.save_settings({"last_summary_dismissed": _this_monday()})
-        page.close(weekly_banner)
+        weekly_banner.visible = False
+        try:
+            weekly_banner.update()
+        except Exception:
+            pass
 
-    show_banner_now = _should_show_banner()
-    if show_banner_now:
+    if _should_show_banner():
         s = get_weekly_summary()
         weekly_banner.content = ft.Text(_build_banner_text(s), color="white", size=13)
+        weekly_banner.visible = True
 
     interval_toggle = ft.CupertinoSegmentedButton(
         controls=[
@@ -265,6 +283,7 @@ def build_dashboard(page: ft.Page):
             ft.Column([
                 dashboard_title_lbl,
                 ft.Row([dashboard_subtitle_lbl, streak_badge], spacing=10),
+                quote_lbl,
             ], spacing=2),
             ft.Row([btn_prev, btn_calendar, interval_toggle, btn_next], spacing=4, alignment=ft.MainAxisAlignment.END),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -289,12 +308,11 @@ def build_dashboard(page: ft.Page):
         ft.Container(height=5),
     ], expand=True, scroll=ft.ScrollMode.ALWAYS)
 
-    # weekly_banner is shown via page.open()/page.close() (see below) rather
-    # than as a layout child — ft.Banner is designed to be surfaced that way,
-    # and embedding it directly in this Column can cause styling quirks
-    # depending on the Flet version.
+    # weekly_banner sits at the top of the layout column; its visible property
+    # controls whether it is shown. This avoids page.open()/page.close() which
+    # are not available in Flet 0.85.x.
     dashboard_layout_view = ft.Column(
-        [header_bar, dashboard_scroll_body],
+        [weekly_banner, header_bar, dashboard_scroll_body],
         expand=True,
         spacing=0,
     )
@@ -316,8 +334,5 @@ def build_dashboard(page: ft.Page):
     threading.Thread(target=schedule_native_callback, daemon=True).start()
 
     repaint_dashboard_ui()
-
-    if show_banner_now:
-        page.open(weekly_banner)
 
     return dashboard_layout_view

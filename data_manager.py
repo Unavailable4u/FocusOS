@@ -121,7 +121,7 @@ def initialize_db():
                 "monthly_expense_budget": 0,
                 "category_budgets": {}
             },
-            "journal": [],         # [{"date": "YYYY-MM-DD", "mood": 3, "text": "..."}]
+            "journal": [],         # [{"date": "YYYY-MM-DD", "mood": 3, "went_well": "...", "blockers": "..."}]
             "pomodoro_notes": []   # [{"date": "...", "task": "...", "note": "..."}]
         }
         with open(DATA_FILE, "w") as f:
@@ -624,3 +624,62 @@ def get_pomodoro_notes(date_str: str | None = None) -> list:
     if date_str:
         notes = [n for n in notes if n.get("date") == date_str]
     return sorted(notes, key=lambda n: (n.get("date", ""), n.get("time", "")), reverse=True)
+
+
+# ── Journal helpers ───────────────────────────────────────────────────────────
+
+def add_journal_entry(mood_rating: int, went_well: str, blockers: str) -> dict:
+    """
+    Upserts today's journal entry in data["journal"].
+
+    If an entry for today already exists it is updated in-place; otherwise
+    a new one is appended.  Only one entry per calendar day is ever stored.
+
+    Stored shape:
+        {"date": "YYYY-MM-DD", "mood": int, "went_well": str, "blockers": str}
+
+    Returns the final (inserted or updated) entry dict.
+    """
+    data  = load_data()
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    entry = {
+        "date":      today,
+        "mood":      int(mood_rating),
+        "went_well": went_well.strip(),
+        "blockers":  blockers.strip(),
+    }
+
+    journal = data.get("journal", [])
+    for i, existing in enumerate(journal):
+        if existing.get("date") == today:
+            journal[i] = entry          # update in-place — no duplicate
+            data["journal"] = journal
+            save_data(data)
+            return entry
+
+    journal.append(entry)               # first entry for today
+    data["journal"] = journal
+    save_data(data)
+    return entry
+
+
+def get_journal_entries(limit: int = 30) -> list:
+    """
+    Returns the most recent journal entries, newest-first.
+
+    Parameters
+    ----------
+    limit : int
+        Maximum number of entries to return (default 30).
+        Pass 0 or a negative number to return all entries.
+
+    Returns
+    -------
+    list of dicts, each with keys: date, mood, went_well, blockers.
+    """
+    entries = load_data().get("journal", [])
+    entries = sorted(entries, key=lambda e: e.get("date", ""), reverse=True)
+    if limit and limit > 0:
+        entries = entries[:limit]
+    return entries

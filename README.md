@@ -7,7 +7,7 @@ A personal dashboard for managing daily expenses and task tracking, built with P
 - **Pomodoro**: Integrated focus timer.
 
 ## Setup Instructions
-1. Clone this repository: `git clone <your-github-repo-url>`
+1. Clone this repository: `git clone <github.com/Unavailable4u/FocusOS>`
 2. Install dependencies: `pip install -r requirements.txt`
 3. Run the app: `python main.py`
 
