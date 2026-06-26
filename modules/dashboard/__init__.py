@@ -308,6 +308,11 @@ def build_dashboard(page: ft.Page):
         last_dismissed = dm.get_settings().get("last_summary_dismissed", "")
         return last_dismissed != _this_monday()
 
+    # FIX #12: Use page.open() / page.close() instead of placing ft.Banner
+    # directly inside the layout Column. In some Flet versions, Banner is not
+    # designed to be a layout child and may not slide in from the top correctly.
+    # Using page.open()/page.close() is the canonical API and works across all
+    # supported Flet versions.
     weekly_banner = ft.Banner(
         bgcolor="#1A2332",
         leading=ft.Icon(ft.Icons.INSIGHTS_ROUNDED, color="#00FFFF", size=32),
@@ -320,7 +325,6 @@ def build_dashboard(page: ft.Page):
                 on_click=lambda e: _dismiss_banner(e),
             )
         ],
-        visible=False,
     )
 
     def _build_banner_text(s: dict) -> str:
@@ -338,16 +342,18 @@ def build_dashboard(page: ft.Page):
 
     def _dismiss_banner(e):
         dm.save_settings({"last_summary_dismissed": _this_monday()})
-        weekly_banner.visible = False
         try:
-            weekly_banner.update()
+            page.close(weekly_banner)
         except Exception:
             pass
 
     if _should_show_banner():
         s = get_weekly_summary()
         weekly_banner.content = ft.Text(_build_banner_text(s), color="white", size=13)
-        weekly_banner.visible = True
+        try:
+            page.open(weekly_banner)
+        except Exception:
+            pass
 
     interval_toggle = ft.CupertinoSegmentedButton(
         controls=[
@@ -397,8 +403,12 @@ def build_dashboard(page: ft.Page):
         ft.Container(height=5),
     ], expand=True, scroll=ft.ScrollMode.ALWAYS)
 
+    # FIX #12 (continued): weekly_banner is NO LONGER placed in this Column.
+    # It is opened/closed via page.open() / page.close() above and in
+    # _dismiss_banner(). The layout Column now only contains header_bar and
+    # dashboard_scroll_body.
     dashboard_layout_view = ft.Column(
-        [weekly_banner, header_bar, dashboard_scroll_body],
+        [header_bar, dashboard_scroll_body],
         expand=True,
         spacing=0,
     )
